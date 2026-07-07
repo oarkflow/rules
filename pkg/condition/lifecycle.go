@@ -756,6 +756,12 @@ func stableID(value string) string {
 }
 
 func (s *Service) dispatchLifecycleAction(ctx context.Context, record storage.DefinitionRecord, action LifecycleAction) (bool, *ActionResult) {
+	start := time.Now()
+	defer func() {
+		if s.cfg.OnAction != nil {
+			s.cfg.OnAction(float64(time.Since(start).Milliseconds()))
+		}
+	}()
 	if allowed, reason := s.actionRuntimeAllowed(ctx, record, action); !allowed {
 		return false, &ActionResult{Handled: false, Status: "action_not_allowlisted", Error: reason}
 	}

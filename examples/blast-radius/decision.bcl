@@ -1,0 +1,94 @@
+bcl { version "1.0" strict true }
+
+version "1"
+environment "example"
+metadata { owner "platform-sre" domain "blast-radius-demo" }
+
+reason_code_catalog "blast_demo" {
+  code "OK" { description "Request is permitted" }
+  code "BLOCKED" { description "Request is denied by policy" }
+  code "REVIEW" { description "Request requires manual review" }
+}
+
+decision_schema "rate_limit" {
+  effects [allow, deny]
+  default allow
+  strategy first_match
+}
+
+decision_schema "geo_check" {
+  effects [allow, deny]
+  default allow
+  strategy first_match
+}
+
+decision_table "rate_limit" {
+  default allow
+  hit_policy first
+
+  row "block-high-rate" {
+    priority 100
+    when { request.rate > 100 }
+    then { decision deny }
+    reason "rate limit exceeded"
+    reason_code "BLOCKED"
+  }
+
+  row "allow-normal-rate" {
+    priority 50
+    when { request.rate <= 50 }
+    then { decision allow }
+    reason "normal rate"
+    reason_code "OK"
+  }
+}
+
+decision_table "geo_check" {
+  default allow
+  hit_policy first
+
+  row "block-restricted-geo" {
+    priority 100
+    when { any { request.country == "XX" request.country == "YY" } }
+    then { decision deny }
+    reason "restricted geography"
+    reason_code "BLOCKED"
+  }
+}
+
+chain "access_chain" {
+  entity "request.user_id"
+  decisions ["rate_limit", "geo_check"]
+  watch "rate_watch" {
+    event "high_rate"
+    window "5m"
+    step "notify" { threshold 3 action "warn" severity "medium" ttl "10m" }
+  }
+}
+
+lifecycle "request_lifecycle" {
+  entity "request.user_id"
+  phase "pre_process" {
+    decision "geo_check"
+  }
+  phase "main" {
+    decision "rate_limit"
+    chain "access_chain"
+  }
+}
+
+routes "api" {
+  route "write_data" { method "POST" pattern "/api/data" decisions ["rate_limit", "geo_check"] chains ["access_chain"] }
+}
+
+test "pass through" {
+  decision "rate_limit"
+  input { request.rate 10 request.country "US" request.user_id "u-1" }
+  expect { effect "allow" }
+}
+
+test "block restricted geo" {
+  decision "geo_check"
+  input { request.rate 10 request.country "XX" request.user_id "u-2" }
+  expect { effect "deny" }
+}

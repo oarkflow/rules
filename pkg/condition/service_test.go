@@ -2541,6 +2541,88 @@ func conditionTenant(ctx context.Context, tenant string) context.Context {
 	return ContextWithTenant(ctx, tenant)
 }
 
+func TestServiceStatefulScenarioWithClock(t *testing.T) {
+	ctx := context.Background()
+	now := time.Date(2026, 6, 1, 0, 0, 0, 0, time.UTC)
+	svc := NewService(storage.NewMemoryStore(), Config{
+		RequireActivationApproval: true,
+		Clock:                    func() time.Time { return now },
+	})
+
+	// Step 1: Publish — version should be activation_pending and not auto-activated
+	pub, err := svc.Publish(ctx, PublishRequest{Name: "demo", Source: demoSource})
+	if err != nil {
+		t.Fatalf("publish: %v", err)
+	}
+	if pub.Definition.Version == "" {
+		t.Fatal("expected a version after publish")
+	}
+	if pub.Definition.Metadata["activation_pending"] != true {
+		t.Fatalf("expected activation_pending=true, got %#v", pub.Definition.Metadata)
+	}
+
+	// Step 2: Evaluate pre-activation — should fail because version is not activated (approval pending)
+	if _, err := svc.Evaluate(ctx, "demo", EvaluateRequest{
+		Decision: "access",
+		Input:    map[string]any{"request": map[string]any{"ok": true}},
+	}); err == nil {
+		t.Fatal("expected evaluate to fail pre-activation")
+	}
+
+	// Step 3: Activate without approval should fail
+	if _, err := svc.Activate(ctx, "demo", pub.Definition.Version, "development"); err == nil {
+		t.Fatal("expected activation to be rejected without approval")
+	}
+
+	// Step 4: Approve
+	approval, err := svc.Approve(ctx, "demo", pub.Definition.Version, ApprovalRequest{ApprovedBy: "test-owner", Reason: "test-review"})
+	if err != nil {
+		t.Fatalf("approve: %v", err)
+	}
+	if approval.Definition.Metadata["approved"] != true {
+		t.Fatalf("expected approved=true, got %#v", approval.Definition.Metadata)
+	}
+
+	// Step 5: Activate after approval — should succeed (also clears activation_pending)
+	activated, err := svc.Activate(ctx, "demo", pub.Definition.Version, "development")
+	if err != nil {
+		t.Fatalf("activate: %v", err)
+	}
+	if activated.Definition.Name != "demo" {
+		t.Fatalf("expected activated definition name=demo, got %q", activated.Definition.Name)
+	}
+	if activated.Definition.Metadata["activation_pending"] == true {
+		t.Fatalf("expected activation_pending to be cleared after activate")
+	}
+
+	// Step 6: Evaluate post-activation — should still work
+	eval2, err := svc.Evaluate(ctx, "demo", EvaluateRequest{
+		Decision: "access",
+		Input:    map[string]any{"request": map[string]any{"ok": true}},
+	})
+	if err != nil {
+		t.Fatalf("evaluate post-activation: %v", err)
+	}
+	if eval2.Report.Decision.Effect != "allow" {
+		t.Fatalf("expected allow, got %q", eval2.Report.Decision.Effect)
+	}
+
+	// Step 7: Check audit trail has publish + approve events
+	audits, err := svc.QueryAudits(ctx, storage.ListOptions{})
+	if err != nil {
+		t.Fatalf("query audits: %v", err)
+	}
+	ops := map[string]int{}
+	for _, a := range audits {
+		ops[a.Operation]++
+	}
+	for _, op := range []string{"publish_version", "approve", "activate"} {
+		if ops[op] == 0 {
+			t.Fatalf("missing audit event for %q", op)
+		}
+	}
+}
+
 func containsString(values []string, want string) bool {
 	for _, value := range values {
 		if value == want {

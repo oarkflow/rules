@@ -23,6 +23,12 @@ type Config struct {
 	Routes                    []routing.Route          `json:"routes,omitempty"`
 	ActionHandlers            map[string]ActionHandler `json:"-"`
 	Clock                     func() time.Time         `json:"-"`
+	OnDecision                func(durationMs float64) `json:"-"`
+	OnChain                   func(durationMs float64) `json:"-"`
+	OnAction                  func(durationMs float64) `json:"-"`
+	ApprovalPolicies          []ApprovalPolicyRule     `json:"approval_policies,omitempty"`
+	ApprovalSinks             []ApprovalSink           `json:"approval_sinks,omitempty"`
+	RedactConfig              *PIIRedactionConfig      `json:"redact_config,omitempty"`
 }
 
 type RuntimePolicy struct {
@@ -39,6 +45,7 @@ type RuntimePolicy struct {
 	WebhookTimeout         time.Duration     `json:"webhook_timeout,omitempty"`
 	ExternalTimeout        time.Duration     `json:"external_timeout,omitempty"`
 	MaxStateRecords        int               `json:"max_state_records,omitempty"`
+	Metadata               map[string]any    `json:"metadata,omitempty"`
 }
 
 type ActionAllowlist struct {
@@ -545,4 +552,97 @@ type WorkflowRequest struct {
 	TenantID    string         `json:"tenant_id,omitempty"`
 	Input       map[string]any `json:"input,omitempty"`
 	Environment string         `json:"environment,omitempty"`
+}
+
+type ApprovalPolicyRule struct {
+	ID           string          `json:"id,omitempty"`
+	MinSeverity  string          `json:"min_severity,omitempty"`
+	Definitions  []string        `json:"definitions,omitempty"`
+	Environments []string        `json:"environments,omitempty"`
+	Sinks        []ApprovalSink  `json:"sinks,omitempty"`
+	RequireOwner bool            `json:"require_owner,omitempty"`
+	MaxAge       string          `json:"max_age,omitempty"`
+	Metadata     map[string]any  `json:"metadata,omitempty"`
+}
+
+type BlastRadiusReport struct {
+	Definition       string          `json:"definition"`
+	BaseVersion      string          `json:"base_version,omitempty"`
+	CandidateVersion string          `json:"candidate_version,omitempty"`
+	Decisions        RadiusDiff      `json:"decisions"`
+	Chains           RadiusDiff      `json:"chains"`
+	Routes           RadiusDiff      `json:"routes"`
+	Lifecycles       RadiusDiff      `json:"lifecycles"`
+	Actions          RadiusDiff      `json:"actions"`
+	Steps            RadiusStepDiff  `json:"steps,omitempty"`
+	DependencyGraph  DependencyGraph `json:"dependency_graph,omitempty"`
+	ImpactSummary    []string        `json:"impact_summary,omitempty"`
+}
+
+type RadiusDiff struct {
+	Total       int      `json:"total"`
+	Added       []string `json:"added,omitempty"`
+	Removed     []string `json:"removed,omitempty"`
+	Unchanged   []string `json:"unchanged,omitempty"`
+	AffectedPct float64  `json:"affected_pct,omitempty"`
+}
+
+type RadiusStepDiff struct {
+	Added   []string `json:"added,omitempty"`
+	Removed []string `json:"removed,omitempty"`
+	Changed []string `json:"changed,omitempty"`
+}
+
+type DependencyGraph struct {
+	Nodes []DepNode `json:"nodes,omitempty"`
+	Edges []DepEdge `json:"edges,omitempty"`
+}
+
+type DepNode struct {
+	ID       string `json:"id"`
+	Kind     string `json:"kind"`
+	New      bool   `json:"new,omitempty"`
+	Removed  bool   `json:"removed,omitempty"`
+	Affected bool   `json:"affected,omitempty"`
+}
+
+type DepEdge struct {
+	From   string `json:"from"`
+	To     string `json:"to"`
+	Weight int    `json:"weight,omitempty"`
+}
+
+type GovernanceMetadata struct {
+	Owner              string   `json:"owner,omitempty"`
+	Domain             string   `json:"domain,omitempty"`
+	Tags               []string `json:"tags,omitempty"`
+	ComplianceFrameworks []string `json:"compliance_frameworks,omitempty"`
+	DataClassification string   `json:"data_classification,omitempty"`
+	ReviewRequired     bool     `json:"review_required,omitempty"`
+	ReviewInterval     string   `json:"review_interval,omitempty"`
+	LastReviewed       string   `json:"last_reviewed,omitempty"`
+}
+
+type OwnershipRecord struct {
+	Definition string `json:"definition"`
+	Owner      string `json:"owner"`
+	Team       string `json:"team,omitempty"`
+	Contact    string `json:"contact,omitempty"`
+	Slack      string `json:"slack,omitempty"`
+	ReviewedAt string `json:"reviewed_at,omitempty"`
+}
+
+type LatencyHistogram struct {
+	Label string    `json:"label"`
+	Buckets []Bucket `json:"buckets,omitempty"`
+	P50   float64   `json:"p50,omitempty"`
+	P90   float64   `json:"p90,omitempty"`
+	P99   float64   `json:"p99,omitempty"`
+	Count int64     `json:"count"`
+	Total float64   `json:"total_ms"`
+}
+
+type Bucket struct {
+	Le     float64 `json:"le"`
+	Count  int64   `json:"count"`
 }

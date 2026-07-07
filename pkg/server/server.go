@@ -31,6 +31,7 @@ type Server struct {
 	trustedProxies []*net.IPNet
 	logf           func(format string, args ...any)
 	routeMatcher   *routing.Matcher
+	redactConfig   *condition.PIIRedactionConfig
 }
 
 type Option func(*Server)
@@ -57,6 +58,10 @@ func WithRateLimit(limit int, window time.Duration) Option {
 
 func WithLogger(logf func(format string, args ...any)) Option {
 	return func(s *Server) { s.logf = logf }
+}
+
+func WithRedactConfig(cfg *condition.PIIRedactionConfig) Option {
+	return func(s *Server) { s.redactConfig = cfg }
 }
 
 func WithTrustedProxies(cidrs []string) Option {
@@ -91,6 +96,11 @@ func New(service *condition.Service, opts ...Option) *Server {
 	if s.timeout == 0 {
 		s.timeout = 5 * time.Second
 	}
+
+	cfg.OnDecision = func(ms float64) { s.metrics.ObserveDecisionLatency(ms) }
+	cfg.OnChain = func(ms float64) { s.metrics.ObserveChainLatency(ms) }
+	cfg.OnAction = func(ms float64) { s.metrics.ObserveActionLatency(ms) }
+
 	for _, opt := range opts {
 		opt(s)
 	}
@@ -152,7 +162,21 @@ func defaultRoles() []*authz.Role {
 }
 
 func (s *Server) health(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+	info := map[string]any{
+		"ok":   true,
+		"time": time.Now().UTC().Format(time.RFC3339),
+	}
+	if s.service != nil {
+		readiness := s.service.ProductionReadiness(r.Context())
+		info["store_available"] = readiness.Checks["store_available"]
+		info["audit_chain_valid"] = readiness.Checks["audit_chain_valid"]
+		info["definitions_count"] = readiness.Counts["definitions"]
+		info["open_incidents"] = readiness.Counts["open_incidents"]
+		info["dead_letter_actions"] = readiness.Counts["dead_letter_actions"]
+		info["ready"] = readiness.Ready
+		info["environment"] = readiness.Environment
+	}
+	writeJSON(w, http.StatusOK, info)
 }
 
 func (s *Server) ready(w http.ResponseWriter, r *http.Request) {
@@ -570,6 +594,67 @@ func (s *Server) reload(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, resp)
 }
 
+func (s *Server) blastRadius(w http.ResponseWriter, r *http.Request) {
+	var req condition.SimulationRequest
+	if !decodeJSON(w, r, s.maxBody, &req) {
+		return
+	}
+	resp, err := s.service.BlastRadius(r.Context(), r.PathValue("name"), req)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "blast_radius_failed", err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, resp)
+}
+
+func (s *Server) verifyBundle(w http.ResponseWriter, r *http.Request) {
+	valid, err := s.service.VerifyBundle(r.Context(), r.PathValue("name"))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "verify_bundle_failed", err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"verified": valid})
+}
+
+func (s *Server) checkApproval(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Version     string `json:"version"`
+		Environment string `json:"environment,omitempty"`
+	}
+	if !decodeJSON(w, r, s.maxBody, &req) {
+		return
+	}
+	ok, policy, err := s.service.CheckApproval(r.Context(), r.PathValue("name"), req.Version, req.Environment)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "check_approval_failed", err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"approved": ok, "policy": policy})
+}
+
+func (s *Server) resolveApproval(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Version     string `json:"version"`
+		Environment string `json:"environment,omitempty"`
+		Approved    bool   `json:"approved"`
+		ApprovedBy  string `json:"approved_by,omitempty"`
+		Reason      string `json:"reason,omitempty"`
+	}
+	if !decodeJSON(w, r, s.maxBody, &req) {
+		return
+	}
+	resp, err := s.service.ResolveApproval(r.Context(), r.PathValue("name"), req.Version, req.Environment, req.Approved, req.ApprovedBy, req.Reason)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "resolve_approval_failed", err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, resp)
+}
+
+func (s *Server) latencyHistograms(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK, s.metrics.Snapshot())
+}
+
 func (s *Server) rateLimit(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if s.limiter == nil || r.URL.Path == "/healthz" {
@@ -596,9 +681,11 @@ func (s *Server) observe(next http.Handler) http.Handler {
 		rr := &statusRecorder{ResponseWriter: w, status: http.StatusOK}
 		s.metrics.Begin()
 		defer func() {
-			s.metrics.End(firstNonEmpty(r.Header.Get("X-Tenant-ID"), condition.TenantFromContext(r.Context())), r.Method, r.URL.Path, rr.status, time.Since(start))
+			duration := time.Since(start)
+			s.metrics.End(firstNonEmpty(r.Header.Get("X-Tenant-ID"), condition.TenantFromContext(r.Context())), r.Method, r.URL.Path, rr.status, duration)
+			s.metrics.ObserveRouteLatency(float64(duration.Milliseconds()))
 			if s.logf != nil {
-				s.logf("%s %s status=%d duration=%s", r.Method, r.URL.Path, rr.status, time.Since(start))
+				s.logf("%s %s status=%d duration=%s", r.Method, r.URL.Path, rr.status, duration)
 			}
 		}()
 		next.ServeHTTP(rr, r)
@@ -728,23 +815,57 @@ type Metrics struct {
 	routeCounts  map[string]int64
 	statusCounts map[int]int64
 	tenantCounts map[string]int64
+
+	decisionLatency    []float64
+	chainLatency       []float64
+	routeLatency       []float64
+	actionLatency      []float64
+	decisionCounter    atomic.Int64
+	chainCounter       atomic.Int64
+	routeCounter       atomic.Int64
+	actionCounter      atomic.Int64
+	latencyMu          sync.Mutex
 }
 
 type MetricsSnapshot struct {
-	StartedAt        time.Time        `json:"started_at"`
-	UptimeSeconds    int64            `json:"uptime_seconds"`
-	RequestsTotal    int64            `json:"requests_total"`
-	ErrorsTotal      int64            `json:"errors_total"`
-	RateLimited      int64            `json:"rate_limited_total"`
-	InFlight         int64            `json:"in_flight"`
-	AverageLatencyMS float64          `json:"average_latency_ms"`
-	Routes           map[string]int64 `json:"routes,omitempty"`
-	Statuses         map[string]int64 `json:"statuses,omitempty"`
-	Tenants          map[string]int64 `json:"tenants,omitempty"`
+	StartedAt          time.Time                   `json:"started_at"`
+	UptimeSeconds      int64                       `json:"uptime_seconds"`
+	RequestsTotal      int64                       `json:"requests_total"`
+	ErrorsTotal        int64                       `json:"errors_total"`
+	RateLimited        int64                       `json:"rate_limited_total"`
+	InFlight           int64                       `json:"in_flight"`
+	AverageLatencyMS   float64                     `json:"average_latency_ms"`
+	Routes             map[string]int64            `json:"routes,omitempty"`
+	Statuses           map[string]int64            `json:"statuses,omitempty"`
+	Tenants            map[string]int64            `json:"tenants,omitempty"`
+	DecisionsTotal     int64                       `json:"decisions_total,omitempty"`
+	ChainsTotal        int64                       `json:"chains_total,omitempty"`
+	RoutesTotal        int64                       `json:"routes_total,omitempty"`
+	ActionsTotal       int64                       `json:"actions_total,omitempty"`
+	DecisionHistogram  []HistogramBucket           `json:"decision_latency_histogram,omitempty"`
+	ChainHistogram     []HistogramBucket           `json:"chain_latency_histogram,omitempty"`
+	RouteHistogram     []HistogramBucket           `json:"route_latency_histogram,omitempty"`
+	ActionHistogram    []HistogramBucket           `json:"action_latency_histogram,omitempty"`
 }
 
+type HistogramBucket struct {
+	Le    float64 `json:"le"`
+	Count int64   `json:"count"`
+}
+
+var defaultHistogramBuckets = []float64{1, 5, 10, 25, 50, 100, 250, 500, 1000, 2500, 5000, 10000}
+
 func NewMetrics() *Metrics {
-	return &Metrics{started: time.Now(), routeCounts: map[string]int64{}, statusCounts: map[int]int64{}, tenantCounts: map[string]int64{}}
+	return &Metrics{
+		started:         time.Now(),
+		routeCounts:     map[string]int64{},
+		statusCounts:    map[int]int64{},
+		tenantCounts:    map[string]int64{},
+		decisionLatency: make([]float64, 0, 1024),
+		chainLatency:    make([]float64, 0, 1024),
+		routeLatency:    make([]float64, 0, 1024),
+		actionLatency:   make([]float64, 0, 1024),
+	}
 }
 
 func (m *Metrics) Begin() {
@@ -776,6 +897,63 @@ func (m *Metrics) IncRateLimited() {
 	}
 }
 
+func (m *Metrics) ObserveDecisionLatency(ms float64) {
+	if m == nil {
+		return
+	}
+	m.latencyMu.Lock()
+	m.decisionLatency = append(m.decisionLatency, ms)
+	m.decisionCounter.Add(1)
+	m.latencyMu.Unlock()
+}
+
+func (m *Metrics) ObserveChainLatency(ms float64) {
+	if m == nil {
+		return
+	}
+	m.latencyMu.Lock()
+	m.chainLatency = append(m.chainLatency, ms)
+	m.chainCounter.Add(1)
+	m.latencyMu.Unlock()
+}
+
+func (m *Metrics) ObserveRouteLatency(ms float64) {
+	if m == nil {
+		return
+	}
+	m.latencyMu.Lock()
+	m.routeLatency = append(m.routeLatency, ms)
+	m.routeCounter.Add(1)
+	m.latencyMu.Unlock()
+}
+
+func (m *Metrics) ObserveActionLatency(ms float64) {
+	if m == nil {
+		return
+	}
+	m.latencyMu.Lock()
+	m.actionLatency = append(m.actionLatency, ms)
+	m.actionCounter.Add(1)
+	m.latencyMu.Unlock()
+}
+
+func buildHistogram(values []float64, buckets []float64) []HistogramBucket {
+	if buckets == nil {
+		buckets = defaultHistogramBuckets
+	}
+	hist := make([]HistogramBucket, len(buckets))
+	for i, le := range buckets {
+		count := int64(0)
+		for _, v := range values {
+			if v <= le {
+				count++
+			}
+		}
+		hist[i] = HistogramBucket{Le: le, Count: count}
+	}
+	return hist
+}
+
 func (m *Metrics) Snapshot() MetricsSnapshot {
 	if m == nil {
 		return MetricsSnapshot{}
@@ -796,9 +974,12 @@ func (m *Metrics) Snapshot() MetricsSnapshot {
 		Routes:           map[string]int64{},
 		Statuses:         map[string]int64{},
 		Tenants:          map[string]int64{},
+		DecisionsTotal:   m.decisionCounter.Load(),
+		ChainsTotal:      m.chainCounter.Load(),
+		RoutesTotal:      m.routeCounter.Load(),
+		ActionsTotal:     m.actionCounter.Load(),
 	}
 	m.mu.RLock()
-	defer m.mu.RUnlock()
 	for k, v := range m.routeCounts {
 		snapshot.Routes[k] = v
 	}
@@ -808,6 +989,15 @@ func (m *Metrics) Snapshot() MetricsSnapshot {
 	for k, v := range m.tenantCounts {
 		snapshot.Tenants[k] = v
 	}
+	m.mu.RUnlock()
+
+	m.latencyMu.Lock()
+	snapshot.DecisionHistogram = buildHistogram(m.decisionLatency, defaultHistogramBuckets)
+	snapshot.ChainHistogram = buildHistogram(m.chainLatency, defaultHistogramBuckets)
+	snapshot.RouteHistogram = buildHistogram(m.routeLatency, defaultHistogramBuckets)
+	snapshot.ActionHistogram = buildHistogram(m.actionLatency, defaultHistogramBuckets)
+	m.latencyMu.Unlock()
+
 	return snapshot
 }
 

@@ -138,6 +138,122 @@ func BenchmarkServiceLargeDecisionTable(b *testing.B) {
 	}
 }
 
+func BenchmarkRoutingMultiRouteMatch(b *testing.B) {
+	ctx := context.Background()
+	var routes strings.Builder
+	for i := 0; i < 200; i++ {
+		fmt.Fprintf(&routes, `route "r-%d" { method "GET" pattern "/api/resource/%d" decisions ["access"] chains ["ch"] }`, i, i)
+		routes.WriteByte('\n')
+	}
+	source := fmt.Sprintf(`module "routing" {
+  decision_schema "access" { effects [allow, deny] default allow strategy first_match }
+  decision_table "access" { default allow }
+  chain "ch" { entity "request.id" watch "w" { event "e" window "1m" step "s" { threshold 1 action "log" severity "low" } } }
+  routes "http" { %s }
+}`, routes.String())
+	if _, err := NewService(storage.NewMemoryStore(), Config{}).Publish(ctx, PublishRequest{Name: "routing", Source: source}); err != nil {
+		b.Fatal(err)
+	}
+	svc := NewService(storage.NewMemoryStore(), Config{})
+	if _, err := svc.Publish(ctx, PublishRequest{Name: "routing", Source: source}); err != nil {
+		b.Fatal(err)
+	}
+	input := map[string]any{"request": map[string]any{"id": "x"}}
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		if _, err := svc.Evaluate(ctx, "routing", EvaluateRequest{Decision: "access", Input: input}); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
+func BenchmarkRoutingMultiRouteNoMatch(b *testing.B) {
+	ctx := context.Background()
+	var routes strings.Builder
+	for i := 0; i < 200; i++ {
+		fmt.Fprintf(&routes, `route "r-%d" { method "GET" pattern "/api/resource/%d" decisions ["access"] }`, i, i)
+		routes.WriteByte('\n')
+	}
+	source := fmt.Sprintf(`module "routing" {
+  decision_schema "access" { effects [allow, deny] default allow strategy first_match }
+  decision_table "access" { default allow }
+  routes "http" { %s }
+}`, routes.String())
+	svc := NewService(storage.NewMemoryStore(), Config{})
+	if _, err := svc.Publish(ctx, PublishRequest{Name: "routing", Source: source}); err != nil {
+		b.Fatal(err)
+	}
+	input := map[string]any{"request": map[string]any{"id": "x"}}
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		if _, err := svc.Evaluate(ctx, "routing", EvaluateRequest{Decision: "access", Input: input}); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
+func BenchmarkDecisionTable100Rows(b *testing.B) {
+	ctx := context.Background()
+	var rows strings.Builder
+	for i := 0; i < 100; i++ {
+		fmt.Fprintf(&rows, `row "r-%d" { when { request.key == "%d" } then { decision allow reason "hit" } reason "hit" reason_code "HIT_%d" }`, i, i, i)
+		rows.WriteByte('\n')
+	}
+	source := `module "dt" { decision_table "access" { default deny hit_policy first ` + rows.String() + ` } }`
+	svc := NewService(storage.NewMemoryStore(), Config{})
+	if _, err := svc.Publish(ctx, PublishRequest{Name: "dt", Source: source}); err != nil {
+		b.Fatal(err)
+	}
+	b.Run("first-row", func(b *testing.B) {
+		input := map[string]any{"request": map[string]any{"key": "0"}}
+		b.ResetTimer()
+		for i := 0; i < b.N; i++ {
+			if _, err := svc.Evaluate(ctx, "dt", EvaluateRequest{Decision: "access", Input: input}); err != nil {
+				b.Fatal(err)
+			}
+		}
+	})
+	b.Run("last-row", func(b *testing.B) {
+		input := map[string]any{"request": map[string]any{"key": "99"}}
+		b.ResetTimer()
+		for i := 0; i < b.N; i++ {
+			if _, err := svc.Evaluate(ctx, "dt", EvaluateRequest{Decision: "access", Input: input}); err != nil {
+				b.Fatal(err)
+			}
+		}
+	})
+	b.Run("default-deny", func(b *testing.B) {
+		input := map[string]any{"request": map[string]any{"key": "999"}}
+		b.ResetTimer()
+		for i := 0; i < b.N; i++ {
+			if _, err := svc.Evaluate(ctx, "dt", EvaluateRequest{Decision: "access", Input: input}); err != nil {
+				b.Fatal(err)
+			}
+		}
+	})
+}
+
+func BenchmarkDecisionTable1000Rows(b *testing.B) {
+	ctx := context.Background()
+	var rows strings.Builder
+	for i := 0; i < 1000; i++ {
+		fmt.Fprintf(&rows, `row "r-%d" { when { request.key == "%d" } then { decision allow reason "hit" } reason "hit" reason_code "HIT_%d" }`, i, i, i)
+		rows.WriteByte('\n')
+	}
+	source := `module "dt1k" { decision_table "access" { default deny hit_policy first ` + rows.String() + ` } }`
+	svc := NewService(storage.NewMemoryStore(), Config{})
+	if _, err := svc.Publish(ctx, PublishRequest{Name: "dt1k", Source: source}); err != nil {
+		b.Fatal(err)
+	}
+	input := map[string]any{"request": map[string]any{"key": "999"}}
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		if _, err := svc.Evaluate(ctx, "dt1k", EvaluateRequest{Decision: "access", Input: input}); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
 func strictDemoSource() string {
 	return `bcl {
   version "1.0"

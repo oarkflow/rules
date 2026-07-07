@@ -104,6 +104,24 @@ func (s *Service) Publish(ctx context.Context, req PublishRequest) (*PublishResp
 	return resp, nil
 }
 
+func (s *Service) BlastRadius(ctx context.Context, definition string, req SimulationRequest) (*BlastRadiusReport, error) {
+	ctx = s.requestContext(ctx, req.TenantID)
+	base, err := s.store.GetActiveDefinition(ctx, definition, s.cfg.Environment)
+	if err != nil {
+		return nil, err
+	}
+	candidate, err := s.candidateProgram(req)
+	if err != nil {
+		return nil, err
+	}
+	report := BlastRadiusCheck(base.Program, candidate, base.Version, first(req.Decision, "candidate"))
+	return &report, nil
+}
+
+func (s *Service) GetLatencyHistograms(ctx context.Context) []LatencyHistogram {
+	return nil
+}
+
 func (s *Service) PublishVersion(ctx context.Context, req PublishRequest) (*PublishResponse, error) {
 	ctx = s.requestContext(ctx, req.TenantID)
 	start := time.Now()
@@ -134,14 +152,28 @@ func (s *Service) PublishVersion(ctx context.Context, req PublishRequest) (*Publ
 		PublishedAt: time.Now(),
 		Metadata:    req.Metadata,
 	}
+	needsApproval := false
 	if s.cfg.RequireActivationApproval && !metadataBool(record.Metadata, "approved") {
+		needsApproval = true
+	}
+	if !needsApproval && len(s.cfg.ApprovalPolicies) > 0 {
+		if ok, policy, _ := s.CheckApproval(ctx, name, version, env); !ok && policy != nil {
+			needsApproval = true
+		}
+	}
+	if needsApproval {
 		record.Metadata = copyMetadata(record.Metadata)
 		record.Metadata["activation_pending"] = true
+		if err := s.store.SaveDefinitionVersion(ctx, record); err != nil {
+			return nil, err
+		}
+		_ = s.requestApprovalIfNeeded(ctx, record)
+	} else {
+		if err := s.store.SaveDefinitionVersion(ctx, record); err != nil {
+			return nil, err
+		}
 	}
-	if err := s.store.SaveDefinitionVersion(ctx, record); err != nil {
-		return nil, err
-	}
-	envelope, err := s.audit(ctx, "publish_version", name, version, env, record.Digest, req, map[string]any{"published": true}, start, nil)
+	envelope, err := s.audit(ctx, "publish_version", name, version, env, record.Digest, req, map[string]any{"published": true, "activation_pending": needsApproval}, start, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -348,6 +380,9 @@ func (s *Service) Evaluate(ctx context.Context, definition string, req EvaluateR
 		IncludeFeatures: req.IncludeFeatures,
 		Strict:          s.strictEvaluation(req.Strict),
 	}, opts)
+	if s.cfg.OnDecision != nil {
+		s.cfg.OnDecision(float64(time.Since(start).Milliseconds()))
+	}
 	if err != nil {
 		envelope, auditErr := s.audit(ctx, "evaluate_failed", definition, record.Version, record.Environment, record.Digest, req, map[string]any{"error": err.Error()}, start, nil)
 		if auditErr != nil {
@@ -481,6 +516,9 @@ func (s *Service) EvaluateChain(ctx context.Context, definition, chainID string,
 		}
 	}
 	evaluation.StateAfter = chainStateSlice(stateByWatch)
+	if s.cfg.OnChain != nil {
+		s.cfg.OnChain(float64(time.Since(start).Milliseconds()))
+	}
 	if evaluation.FinalEffect == "" && evaluation.FinalDecision != nil {
 		evaluation.FinalEffect = evaluation.FinalDecision.Effect
 		evaluation.FinalReason = evaluation.FinalDecision.Reason

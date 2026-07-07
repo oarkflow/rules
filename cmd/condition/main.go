@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"log"
@@ -18,7 +19,6 @@ import (
 	"github.com/oarkflow/rules/pkg/condition"
 	"github.com/oarkflow/rules/pkg/server"
 	"github.com/oarkflow/rules/pkg/storage"
-	"gopkg.in/yaml.v3"
 )
 
 func main() {
@@ -680,7 +680,7 @@ func loadConfig(path string) (RuntimeConfig, error) {
 	if strings.HasSuffix(path, ".bcl") {
 		return cfg, bcl.UnmarshalWithOptions(payload, &cfg, &bcl.Options{AllowEnv: true, BaseDir: filepath.Dir(path)})
 	}
-	return cfg, yaml.Unmarshal(payload, &cfg)
+	return cfg, errors.New("unsupported config file format, must be .json or .bcl")
 }
 
 func serviceConfig(cfg RuntimeConfig) condition.Config {

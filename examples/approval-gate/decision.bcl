@@ -1,0 +1,37 @@
+bcl { version "1.0" strict true }
+
+version "1"
+environment "example"
+metadata { owner "platform-ops" domain "approval-gate-demo" }
+
+reason_code_catalog "deploy_gate" {
+  code "OK" { description "Deployment is authorized" }
+  code "REVIEW" { description "Deployment requires risk review" }
+}
+
+decision_schema "deploy_gate" {
+  effects [allow, deny, require_review]
+  default deny
+  strategy first_match
+}
+
+decision_table "deploy_gate" {
+  default deny
+  hit_policy first
+
+  row "review-production" {
+    priority 80
+    when { deploy.env == "production" }
+    then { decision require_review }
+    reason "production deployment requires review"
+    reason_code "REVIEW"
+  }
+
+  row "allow-staging" {
+    priority 40
+    when { deploy.env == "staging" }
+    then { decision allow }
+    reason "staging deployment authorized"
+    reason_code "OK"
+  }
+}

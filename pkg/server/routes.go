@@ -51,6 +51,11 @@ func (s *Server) routes() []routeSpec {
 		{http.MethodGet, "/v1/reports", s.listReports},
 		{http.MethodGet, "/v1/metrics", s.metricsEndpoint},
 		{http.MethodPost, "/v1/reload", s.reload},
+		{http.MethodPost, "/v1/definitions/{name}/blast-radius", s.blastRadius},
+		{http.MethodPost, "/v1/definitions/{name}/verify-bundle", s.verifyBundle},
+		{http.MethodPost, "/v1/definitions/{name}/versions/{version}/check-approval", s.checkApproval},
+		{http.MethodPost, "/v1/definitions/{name}/versions/{version}/resolve-approval", s.resolveApproval},
+		{http.MethodGet, "/v1/metrics/histograms", s.latencyHistograms},
 	}
 }
 
