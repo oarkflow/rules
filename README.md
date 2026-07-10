@@ -30,9 +30,9 @@ Metrics are available to `condition-admin` and `condition-auditor` roles:
 curl -H 'X-Roles: condition-auditor' http://localhost:8080/v1/metrics
 ```
 
-The default CLI store is file-backed at `.condition`; SQLite is available with `--store sqlite --store-path condition.db`.
+The default CLI store is file-backed at `.condition`; SQLite is available with `--store sqlite --store-path rules.db`.
 
-The HTTP server honors the service `Config` request timeout and max body size. Optional in-memory rate limiting can be enabled from Go with `server.WithRateLimit(limit, window)` or in `condition.yaml`. The CLI server also sets HTTP read/header/write/idle timeouts, supports graceful shutdown, and can serve TLS with `--tls-cert` and `--tls-key`.
+The HTTP server honors the service `Config` request timeout and max body size. Optional in-memory rate limiting can be enabled from Go with `server.WithRateLimit(limit, window)` or in `rules.yaml`. The CLI server also sets HTTP read/header/write/idle timeouts, supports graceful shutdown, and can serve TLS with `--tls-cert` and `--tls-key`.
 
 ## Production Surface
 
@@ -59,7 +59,7 @@ Production config example:
 
 ```bcl
 address ":8443"
-authz_path "./condition.authz"
+authz_path "./rules.authz"
 trusted_proxies ["10.0.0.0/24"]
 
 tls {
@@ -78,7 +78,7 @@ http {
 
 store {
   kind "sqlite"
-  path "/var/lib/condition/condition.db"
+  path "/var/lib/condition/rules.db"
 }
 
 service {
@@ -139,7 +139,7 @@ Start by listing which facts are trusted application facts and which facts are u
 Do not allow a client body to assert security-sensitive facts such as `session.risk.impossible_travel`, `context.device.trusted`, `context.network.ip_reputation`, or `session.token.reuse_detected`. Populate those from Go middleware or `context.Context`:
 
 ```go
-ctx := condition.WithContextFacts(ctx, map[string]any{
+ctx := rules.WithContextFacts(ctx, map[string]any{
 	"device": map[string]any{
 		"trusted": true,
 		"changed": false,
@@ -149,7 +149,7 @@ ctx := condition.WithContextFacts(ctx, map[string]any{
 	},
 })
 
-ctx = condition.WithSession(ctx, map[string]any{
+ctx = rules.WithSession(ctx, map[string]any{
 	"risk": map[string]any{
 		"impossible_travel": true,
 	},

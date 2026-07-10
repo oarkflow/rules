@@ -8,7 +8,7 @@ import (
 
 	"examples/internal/examplebase"
 
-	"github.com/oarkflow/rules/pkg/condition"
+	"github.com/oarkflow/rules"
 	"github.com/oarkflow/rules/pkg/storage"
 )
 
@@ -20,12 +20,12 @@ var candidateSource string
 
 func main() {
 	ctx := context.Background()
-	svc := condition.NewService(storage.NewMemoryStore(), condition.Config{
+	svc := rules.NewService(storage.NewMemoryStore(), rules.Config{
 		Environment:  "example",
 		RequireTests: true,
 	})
 
-	if _, err := svc.Publish(ctx, condition.PublishRequest{
+	if _, err := svc.Publish(ctx, rules.PublishRequest{
 		Name: "blast-radius", Version: "1", Source: policySource,
 		BaseDir: examplebase.Dir(),
 	}); err != nil {
@@ -38,7 +38,7 @@ func main() {
 	evalDemo(ctx, svc)
 
 	fmt.Println("\n--- Blast radius analysis: Version 1 → Version 2 ---")
-	report, err := svc.BlastRadius(ctx, "blast-radius", condition.SimulationRequest{
+	report, err := svc.BlastRadius(ctx, "blast-radius", rules.SimulationRequest{
 		CandidateSource: candidateSource, Decision: "candidate",
 	})
 	if err != nil {
@@ -87,7 +87,7 @@ func main() {
 	}
 }
 
-func printDiff(label string, diff condition.RadiusDiff) {
+func printDiff(label string, diff rules.RadiusDiff) {
 	affected := len(diff.Added) + len(diff.Removed)
 	if affected == 0 {
 		return
@@ -102,8 +102,8 @@ func printDiff(label string, diff condition.RadiusDiff) {
 	}
 }
 
-func evalDemo(ctx context.Context, svc *condition.Service) {
-	resp, err := svc.Evaluate(ctx, "blast-radius", condition.EvaluateRequest{
+func evalDemo(ctx context.Context, svc *rules.Service) {
+	resp, err := svc.Evaluate(ctx, "blast-radius", rules.EvaluateRequest{
 		Decision: "rate_limit",
 		Input:    map[string]any{"request": map[string]any{"rate": 10, "country": "US", "user_id": "u-1"}},
 	})

@@ -13,7 +13,7 @@ import (
 
 	"examples/internal/examplebase"
 
-	"github.com/oarkflow/rules/pkg/condition"
+	"github.com/oarkflow/rules"
 	"github.com/oarkflow/rules/pkg/storage"
 )
 
@@ -22,14 +22,14 @@ func main() {
 	addr := flag.String("addr", ":8081", "HTTP server address")
 	flag.Parse()
 
-	svc := condition.NewService(storage.NewMemoryStore(), condition.Config{
+	svc := rules.NewService(storage.NewMemoryStore(), rules.Config{
 		Environment:  "example",
 		RequireTests: true,
-		Runtime: condition.RuntimePolicy{ActionAllowlists: []condition.ActionAllowlist{
+		Runtime: rules.RuntimePolicy{ActionAllowlists: []rules.ActionAllowlist{
 			{TenantID: "default", Environment: "example", Actions: []string{"log", "notify", "escalate", "endpoint_5xx", "app_5xx", "unexpected_4xx", "healthy"}, Sinks: []string{"event", "log"}},
 		}},
 	})
-	if _, err := svc.Publish(context.Background(), condition.PublishRequest{Name: "request-lifecycle", Version: "1", Path: filepath.Join(examplebase.Dir(), "decision.bcl"), RunTests: true}); err != nil {
+	if _, err := svc.Publish(context.Background(), rules.PublishRequest{Name: "request-lifecycle", Version: "1", Path: filepath.Join(examplebase.Dir(), "decision.bcl"), RunTests: true}); err != nil {
 		log.Fatal(err)
 	}
 	handler := lifecycleMiddleware(svc, routes(svc))
@@ -70,7 +70,7 @@ func curlExamples(addr string) []string {
 	}
 }
 
-func routes(svc *condition.Service) http.Handler {
+func routes(svc *rules.Service) http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/_coverage", func(w http.ResponseWriter, r *http.Request) {
 		report, err := svc.RouteCoverage(r.Context(), "request-lifecycle")
@@ -121,7 +121,7 @@ func writeExampleJSON(w http.ResponseWriter, value any, err error) {
 	_ = enc.Encode(value)
 }
 
-func lifecycleMiddleware(svc *condition.Service, next http.Handler) http.Handler {
+func lifecycleMiddleware(svc *rules.Service, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		rec := httptest.NewRecorder()
 		next.ServeHTTP(rec, r)
@@ -129,7 +129,7 @@ func lifecycleMiddleware(svc *condition.Service, next http.Handler) http.Handler
 		if rec.Code >= 400 && rec.Code < 500 && rec.Code != http.StatusBadRequest && rec.Code != http.StatusUnauthorized && rec.Code != http.StatusForbidden {
 			appKey = "request-lifecycle-client-errors"
 		}
-		resp, err := svc.EvaluateLifecycle(r.Context(), "request-lifecycle", "http_request", condition.LifecycleEvaluateRequest{
+		resp, err := svc.EvaluateLifecycle(r.Context(), "request-lifecycle", "http_request", rules.LifecycleEvaluateRequest{
 			Phase:  "post",
 			Method: r.Method,
 			Path:   r.URL.Path,

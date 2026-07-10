@@ -11,7 +11,7 @@ import (
 
 	"examples/internal/examplebase"
 
-	"github.com/oarkflow/rules/pkg/condition"
+	"github.com/oarkflow/rules"
 	"github.com/oarkflow/rules/pkg/storage"
 )
 
@@ -42,14 +42,14 @@ type SafetyCase struct {
 
 func main() {
 	ctx := context.Background()
-	svc := condition.NewService(storage.NewMemoryStore(), condition.Config{Environment: "example", RequireTests: true})
-	if _, err := svc.Publish(ctx, condition.PublishRequest{Name: "ai-safety", Version: "1", Source: policySource, RunTests: true, BaseDir: examplebase.Dir()}); err != nil {
+	svc := rules.NewService(storage.NewMemoryStore(), rules.Config{Environment: "example", RequireTests: true})
+	if _, err := svc.Publish(ctx, rules.PublishRequest{Name: "ai-safety", Version: "1", Source: policySource, RunTests: true, BaseDir: examplebase.Dir()}); err != nil {
 		log.Fatal(err)
 	}
 
 	for _, c := range safetyQueue() {
 		signal := classify(c.Turn)
-		resp, err := svc.Evaluate(ctx, "ai-safety", condition.EvaluateRequest{Decision: "ai_safety", Input: safetyDecisionFacts(c.Turn, signal)})
+		resp, err := svc.Evaluate(ctx, "ai-safety", rules.EvaluateRequest{Decision: "ai_safety", Input: safetyDecisionFacts(c.Turn, signal)})
 		if err != nil {
 			log.Fatal(err)
 		}

@@ -1,5 +1,5 @@
 address ":8080"
-authz_path "./examples/production-server/condition.authz"
+authz_path "./examples/production-server/rules.authz"
 
 trusted_proxies ["127.0.0.1"]
 

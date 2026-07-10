@@ -10,7 +10,7 @@ import (
 
 	"examples/internal/examplebase"
 
-	"github.com/oarkflow/rules/pkg/condition"
+	"github.com/oarkflow/rules"
 	"github.com/oarkflow/rules/pkg/storage"
 )
 
@@ -64,14 +64,14 @@ type AccessContext struct {
 
 func main() {
 	ctx := context.Background()
-	svc := condition.NewService(storage.NewMemoryStore(), condition.Config{Environment: "example", RequireTests: true})
-	if _, err := svc.Publish(ctx, condition.PublishRequest{Name: "access-control", Version: "1", Source: policySource, RunTests: true, BaseDir: examplebase.Dir()}); err != nil {
+	svc := rules.NewService(storage.NewMemoryStore(), rules.Config{Environment: "example", RequireTests: true})
+	if _, err := svc.Publish(ctx, rules.PublishRequest{Name: "access-control", Version: "1", Source: policySource, RunTests: true, BaseDir: examplebase.Dir()}); err != nil {
 		log.Fatal(err)
 	}
 
 	for _, c := range accessRequests() {
 		access := buildAccessContext(c)
-		resp, err := svc.Evaluate(ctx, "access-control", condition.EvaluateRequest{Decision: "access_control", Input: access.Facts})
+		resp, err := svc.Evaluate(ctx, "access-control", rules.EvaluateRequest{Decision: "access_control", Input: access.Facts})
 		if err != nil {
 			log.Fatal(err)
 		}

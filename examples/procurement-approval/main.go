@@ -10,7 +10,7 @@ import (
 
 	"examples/internal/examplebase"
 
-	"github.com/oarkflow/rules/pkg/condition"
+	"github.com/oarkflow/rules"
 	"github.com/oarkflow/rules/pkg/storage"
 )
 
@@ -55,14 +55,14 @@ type ApprovalPacket struct {
 
 func main() {
 	ctx := context.Background()
-	svc := condition.NewService(storage.NewMemoryStore(), condition.Config{Environment: "example", RequireTests: true})
-	if _, err := svc.Publish(ctx, condition.PublishRequest{Name: "procurement-approval", Version: "1", Source: policySource, RunTests: true, BaseDir: examplebase.Dir()}); err != nil {
+	svc := rules.NewService(storage.NewMemoryStore(), rules.Config{Environment: "example", RequireTests: true})
+	if _, err := svc.Publish(ctx, rules.PublishRequest{Name: "procurement-approval", Version: "1", Source: policySource, RunTests: true, BaseDir: examplebase.Dir()}); err != nil {
 		log.Fatal(err)
 	}
 
 	for _, c := range intake() {
 		packet := buildApprovalPacket(c)
-		resp, err := svc.Evaluate(ctx, "procurement-approval", condition.EvaluateRequest{Decision: "procurement_approval", Input: packet.Facts})
+		resp, err := svc.Evaluate(ctx, "procurement-approval", rules.EvaluateRequest{Decision: "procurement_approval", Input: packet.Facts})
 		if err != nil {
 			log.Fatal(err)
 		}

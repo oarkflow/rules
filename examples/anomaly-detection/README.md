@@ -48,7 +48,7 @@ The chains define reusable result envelopes with structured `response { body { .
 
 The Go host does not define action allowlists, sink lists, chain IDs, watch IDs, or threat-model content. Those are declared in BCL and surfaced through Condition service APIs.
 
-Session, device, network, token, login, and account-risk signals are application-owned facts. In this demo they come from a small server-side session/context lookup keyed by actor, then flow into Condition through `condition.WithContextFacts` and `condition.WithSession`. They are not accepted from request bodies or demo headers. Production apps should populate the same `context.*` and `session.*` facts from auth middleware, session stores, device fingerprinting, IP reputation services, geo middleware, and account-risk services.
+Session, device, network, token, login, and account-risk signals are application-owned facts. In this demo they come from a small server-side session/context lookup keyed by actor, then flow into Condition through `rules.WithContextFacts` and `rules.WithSession`. They are not accepted from request bodies or demo headers. Production apps should populate the same `context.*` and `session.*` facts from auth middleware, session stores, device fingerprinting, IP reputation services, geo middleware, and account-risk services.
 
 When `--watch` is enabled, the server watches `decision.bcl` and every imported `*.bcl` file under the policy tree. Valid edits are reloaded and activated automatically; invalid edits keep the last known good policy active.
 
@@ -68,7 +68,7 @@ First decide where each fact comes from.
 For refund abuse, the user can submit the refund amount and reason, but the app should derive account age, historical refund count, device trust, IP reputation, and other security signals from middleware or services.
 
 ```go
-ctx = condition.WithContextFacts(ctx, map[string]any{
+ctx = rules.WithContextFacts(ctx, map[string]any{
 	"risk": map[string]any{
 		"refund_count_7d": 5,
 		"refund_amount_7d": 1200,

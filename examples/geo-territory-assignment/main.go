@@ -9,7 +9,7 @@ import (
 
 	"examples/internal/examplebase"
 
-	"github.com/oarkflow/rules/pkg/condition"
+	"github.com/oarkflow/rules"
 	"github.com/oarkflow/rules/pkg/storage"
 )
 
@@ -48,14 +48,14 @@ type AssignmentPlan struct {
 
 func main() {
 	ctx := context.Background()
-	svc := condition.NewService(storage.NewMemoryStore(), condition.Config{Environment: "example", RequireTests: true})
-	if _, err := svc.Publish(ctx, condition.PublishRequest{Name: "geo-territory-assignment", Version: "1", Source: policySource, RunTests: true, BaseDir: examplebase.Dir()}); err != nil {
+	svc := rules.NewService(storage.NewMemoryStore(), rules.Config{Environment: "example", RequireTests: true})
+	if _, err := svc.Publish(ctx, rules.PublishRequest{Name: "geo-territory-assignment", Version: "1", Source: policySource, RunTests: true, BaseDir: examplebase.Dir()}); err != nil {
 		log.Fatal(err)
 	}
 
 	for _, c := range territoryCases() {
 		plan := assignTerritory(c)
-		resp, err := svc.Evaluate(ctx, "geo-territory-assignment", condition.EvaluateRequest{Decision: "geo_territory_assignment", Input: plan.Facts})
+		resp, err := svc.Evaluate(ctx, "geo-territory-assignment", rules.EvaluateRequest{Decision: "geo_territory_assignment", Input: plan.Facts})
 		if err != nil {
 			log.Fatal(err)
 		}

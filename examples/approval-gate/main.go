@@ -8,7 +8,7 @@ import (
 
 	"examples/internal/examplebase"
 
-	"github.com/oarkflow/rules/pkg/condition"
+	"github.com/oarkflow/rules"
 	"github.com/oarkflow/rules/pkg/storage"
 )
 
@@ -23,7 +23,7 @@ type DeployCase struct {
 func main() {
 	ctx := context.Background()
 
-	svc := condition.NewService(storage.NewMemoryStore(), condition.Config{
+	svc := rules.NewService(storage.NewMemoryStore(), rules.Config{
 		Environment:               "example",
 		RequireActivationApproval: true,
 	})
@@ -31,7 +31,7 @@ func main() {
 	fmt.Println("=== Approval Gate: Deploy Policy with Activation Approval ===\n")
 
 	fmt.Println("Step 1: Publish policy version 1 (not yet active)")
-	pub, err := svc.Publish(ctx, condition.PublishRequest{
+	pub, err := svc.Publish(ctx, rules.PublishRequest{
 		Name: "approval-gate", Version: "1", Source: policySource,
 		BaseDir: examplebase.Dir(),
 	})
@@ -41,7 +41,7 @@ func main() {
 	fmt.Printf("  version=%s activation_pending=%v\n\n", pub.Definition.Version, pub.Definition.Metadata["activation_pending"])
 
 	fmt.Println("Step 2: Try to evaluate (should fail — no active version)")
-	if _, err := svc.Evaluate(ctx, "approval-gate", condition.EvaluateRequest{
+	if _, err := svc.Evaluate(ctx, "approval-gate", rules.EvaluateRequest{
 		Decision: "deploy_gate",
 		Input:    map[string]any{"deploy": map[string]any{"environment": "staging", "risk_score": 10, "bypass_approval": false}},
 	}); err != nil {
@@ -54,7 +54,7 @@ func main() {
 	}
 
 	fmt.Println("Step 4: Approve version 1 for activation")
-	approval, err := svc.Approve(ctx, "approval-gate", "1", condition.ApprovalRequest{
+	approval, err := svc.Approve(ctx, "approval-gate", "1", rules.ApprovalRequest{
 		ApprovedBy: "deploy-manager",
 		Reason:     "risk review completed",
 	})
@@ -78,7 +78,7 @@ func main() {
 		{Name: "production deploy", Environment: "production"},
 	}
 	for _, c := range cases {
-		resp, err := svc.Evaluate(ctx, "approval-gate", condition.EvaluateRequest{
+		resp, err := svc.Evaluate(ctx, "approval-gate", rules.EvaluateRequest{
 			Decision: "deploy_gate",
 			Input:    map[string]any{"deploy": map[string]any{"env": c.Environment}},
 		})

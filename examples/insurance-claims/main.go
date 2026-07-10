@@ -10,7 +10,7 @@ import (
 
 	"examples/internal/examplebase"
 
-	"github.com/oarkflow/rules/pkg/condition"
+	"github.com/oarkflow/rules"
 	"github.com/oarkflow/rules/pkg/storage"
 )
 
@@ -61,14 +61,14 @@ type ClaimFeatures struct {
 
 func main() {
 	ctx := context.Background()
-	svc := condition.NewService(storage.NewMemoryStore(), condition.Config{Environment: "example", RequireTests: true})
-	if _, err := svc.Publish(ctx, condition.PublishRequest{Name: "insurance-claims", Version: "1", Source: policySource, RunTests: true, BaseDir: examplebase.Dir()}); err != nil {
+	svc := rules.NewService(storage.NewMemoryStore(), rules.Config{Environment: "example", RequireTests: true})
+	if _, err := svc.Publish(ctx, rules.PublishRequest{Name: "insurance-claims", Version: "1", Source: policySource, RunTests: true, BaseDir: examplebase.Dir()}); err != nil {
 		log.Fatal(err)
 	}
 
 	for _, c := range claimInbox() {
 		features := estimateClaim(c)
-		resp, err := svc.Evaluate(ctx, "insurance-claims", condition.EvaluateRequest{Decision: "claim_triage", Input: features.Facts})
+		resp, err := svc.Evaluate(ctx, "insurance-claims", rules.EvaluateRequest{Decision: "claim_triage", Input: features.Facts})
 		if err != nil {
 			log.Fatal(err)
 		}

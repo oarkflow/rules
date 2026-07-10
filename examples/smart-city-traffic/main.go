@@ -9,7 +9,7 @@ import (
 
 	"examples/internal/examplebase"
 
-	"github.com/oarkflow/rules/pkg/condition"
+	"github.com/oarkflow/rules"
 	"github.com/oarkflow/rules/pkg/storage"
 )
 
@@ -44,14 +44,14 @@ type CorridorState struct {
 
 func main() {
 	ctx := context.Background()
-	svc := condition.NewService(storage.NewMemoryStore(), condition.Config{Environment: "example", RequireTests: true})
-	if _, err := svc.Publish(ctx, condition.PublishRequest{Name: "smart-city-traffic", Version: "1", Source: policySource, RunTests: true, BaseDir: examplebase.Dir()}); err != nil {
+	svc := rules.NewService(storage.NewMemoryStore(), rules.Config{Environment: "example", RequireTests: true})
+	if _, err := svc.Publish(ctx, rules.PublishRequest{Name: "smart-city-traffic", Version: "1", Source: policySource, RunTests: true, BaseDir: examplebase.Dir()}); err != nil {
 		log.Fatal(err)
 	}
 
 	for _, c := range trafficFeed() {
 		state := computeCorridorState(c)
-		resp, err := svc.Evaluate(ctx, "smart-city-traffic", condition.EvaluateRequest{Decision: "traffic_priority", Input: state.Facts})
+		resp, err := svc.Evaluate(ctx, "smart-city-traffic", rules.EvaluateRequest{Decision: "traffic_priority", Input: state.Facts})
 		if err != nil {
 			log.Fatal(err)
 		}

@@ -11,7 +11,7 @@ import (
 
 	"examples/internal/examplebase"
 
-	"github.com/oarkflow/rules/pkg/condition"
+	"github.com/oarkflow/rules"
 	"github.com/oarkflow/rules/pkg/storage"
 )
 
@@ -47,14 +47,14 @@ type ModerationCase struct {
 
 func main() {
 	ctx := context.Background()
-	svc := condition.NewService(storage.NewMemoryStore(), condition.Config{Environment: "example", RequireTests: true})
-	if _, err := svc.Publish(ctx, condition.PublishRequest{Name: "content-moderation", Version: "1", Source: policySource, RunTests: true, BaseDir: examplebase.Dir()}); err != nil {
+	svc := rules.NewService(storage.NewMemoryStore(), rules.Config{Environment: "example", RequireTests: true})
+	if _, err := svc.Publish(ctx, rules.PublishRequest{Name: "content-moderation", Version: "1", Source: policySource, RunTests: true, BaseDir: examplebase.Dir()}); err != nil {
 		log.Fatal(err)
 	}
 
 	for _, c := range moderationQueue() {
 		scores := runClassifiers(c.Asset)
-		resp, err := svc.Evaluate(ctx, "content-moderation", condition.EvaluateRequest{Decision: "content_moderation", Input: moderationDecisionFacts(c.Asset, scores)})
+		resp, err := svc.Evaluate(ctx, "content-moderation", rules.EvaluateRequest{Decision: "content_moderation", Input: moderationDecisionFacts(c.Asset, scores)})
 		if err != nil {
 			log.Fatal(err)
 		}

@@ -10,7 +10,7 @@ import (
 
 	"examples/internal/examplebase"
 
-	"github.com/oarkflow/rules/pkg/condition"
+	"github.com/oarkflow/rules"
 	"github.com/oarkflow/rules/pkg/storage"
 )
 
@@ -54,14 +54,14 @@ type PriceRecommendation struct {
 
 func main() {
 	ctx := context.Background()
-	svc := condition.NewService(storage.NewMemoryStore(), condition.Config{Environment: "example", RequireTests: true})
-	if _, err := svc.Publish(ctx, condition.PublishRequest{Name: "dynamic-pricing", Version: "1", Source: policySource, RunTests: true, BaseDir: examplebase.Dir()}); err != nil {
+	svc := rules.NewService(storage.NewMemoryStore(), rules.Config{Environment: "example", RequireTests: true})
+	if _, err := svc.Publish(ctx, rules.PublishRequest{Name: "dynamic-pricing", Version: "1", Source: policySource, RunTests: true, BaseDir: examplebase.Dir()}); err != nil {
 		log.Fatal(err)
 	}
 
 	for _, c := range pricingFeed() {
 		rec := recommendPrice(c)
-		resp, err := svc.Evaluate(ctx, "dynamic-pricing", condition.EvaluateRequest{Decision: "dynamic_pricing", Input: pricingDecisionFacts(c, rec)})
+		resp, err := svc.Evaluate(ctx, "dynamic-pricing", rules.EvaluateRequest{Decision: "dynamic_pricing", Input: pricingDecisionFacts(c, rec)})
 		if err != nil {
 			log.Fatal(err)
 		}

@@ -16,7 +16,7 @@ go run ./examples/enterprise-hardening
 Run the same shape through the CLI:
 
 ```sh
-go run ./cmd/condition publish --config ./examples/enterprise-hardening/condition.bcl --tenant acme --name enterprise-hardening --version 1 --tests ./examples/enterprise-hardening/decision.bcl
-go run ./cmd/condition evaluate --config ./examples/enterprise-hardening/condition.bcl --tenant acme --decision access --input ./examples/enterprise-hardening/inputs/request.json enterprise-hardening
-go run ./cmd/condition canary --config ./examples/enterprise-hardening/condition.bcl --tenant acme --candidate ./examples/enterprise-hardening/candidate.bcl --decision access --dataset canary_cases --promote --promote-version 2 enterprise-hardening
+go run ./cmd/condition publish --config ./examples/enterprise-hardening/rules.bcl --tenant acme --name enterprise-hardening --version 1 --tests ./examples/enterprise-hardening/decision.bcl
+go run ./cmd/condition evaluate --config ./examples/enterprise-hardening/rules.bcl --tenant acme --decision access --input ./examples/enterprise-hardening/inputs/request.json enterprise-hardening
+go run ./cmd/condition canary --config ./examples/enterprise-hardening/rules.bcl --tenant acme --candidate ./examples/enterprise-hardening/candidate.bcl --decision access --dataset canary_cases --promote --promote-version 2 enterprise-hardening
 ```

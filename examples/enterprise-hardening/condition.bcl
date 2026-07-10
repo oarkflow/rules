@@ -1,5 +1,5 @@
 address ":8443"
-authz_path "./condition.authz"
+authz_path "./rules.authz"
 trusted_proxies ["127.0.0.1"]
 
 store {

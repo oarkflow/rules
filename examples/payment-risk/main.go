@@ -10,7 +10,7 @@ import (
 
 	"examples/internal/examplebase"
 
-	"github.com/oarkflow/rules/pkg/condition"
+	"github.com/oarkflow/rules"
 	"github.com/oarkflow/rules/pkg/storage"
 )
 
@@ -57,14 +57,14 @@ type AuthorizationEnrichment struct {
 
 func main() {
 	ctx := context.Background()
-	svc := condition.NewService(storage.NewMemoryStore(), condition.Config{Environment: "example", RequireTests: true})
-	if _, err := svc.Publish(ctx, condition.PublishRequest{Name: "payment-risk", Version: "1", Source: policySource, RunTests: true, BaseDir: examplebase.Dir()}); err != nil {
+	svc := rules.NewService(storage.NewMemoryStore(), rules.Config{Environment: "example", RequireTests: true})
+	if _, err := svc.Publish(ctx, rules.PublishRequest{Name: "payment-risk", Version: "1", Source: policySource, RunTests: true, BaseDir: examplebase.Dir()}); err != nil {
 		log.Fatal(err)
 	}
 
 	for _, c := range authorizationFeed() {
 		enriched := enrichAuthorization(c)
-		resp, err := svc.Evaluate(ctx, "payment-risk", condition.EvaluateRequest{Decision: "payment_risk", Input: authorizationDecisionFacts(c, enriched), IncludeFeatures: true})
+		resp, err := svc.Evaluate(ctx, "payment-risk", rules.EvaluateRequest{Decision: "payment_risk", Input: authorizationDecisionFacts(c, enriched), IncludeFeatures: true})
 		if err != nil {
 			log.Fatal(err)
 		}

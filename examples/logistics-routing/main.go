@@ -10,7 +10,7 @@ import (
 
 	"examples/internal/examplebase"
 
-	"github.com/oarkflow/rules/pkg/condition"
+	"github.com/oarkflow/rules"
 	"github.com/oarkflow/rules/pkg/storage"
 )
 
@@ -51,14 +51,14 @@ type CarrierChoice struct {
 
 func main() {
 	ctx := context.Background()
-	svc := condition.NewService(storage.NewMemoryStore(), condition.Config{Environment: "example", RequireTests: true})
-	if _, err := svc.Publish(ctx, condition.PublishRequest{Name: "logistics-routing", Version: "1", Source: policySource, RunTests: true, BaseDir: examplebase.Dir()}); err != nil {
+	svc := rules.NewService(storage.NewMemoryStore(), rules.Config{Environment: "example", RequireTests: true})
+	if _, err := svc.Publish(ctx, rules.PublishRequest{Name: "logistics-routing", Version: "1", Source: policySource, RunTests: true, BaseDir: examplebase.Dir()}); err != nil {
 		log.Fatal(err)
 	}
 
 	for _, c := range dispatchBoard() {
 		choice := selectCarrier(c)
-		resp, err := svc.Evaluate(ctx, "logistics-routing", condition.EvaluateRequest{Decision: "logistics_routing", Input: routingDecisionFacts(c.Shipment, choice.Carrier)})
+		resp, err := svc.Evaluate(ctx, "logistics-routing", rules.EvaluateRequest{Decision: "logistics_routing", Input: routingDecisionFacts(c.Shipment, choice.Carrier)})
 		if err != nil {
 			log.Fatal(err)
 		}

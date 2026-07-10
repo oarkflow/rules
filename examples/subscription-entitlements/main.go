@@ -8,7 +8,7 @@ import (
 
 	"examples/internal/examplebase"
 
-	"github.com/oarkflow/rules/pkg/condition"
+	"github.com/oarkflow/rules"
 	"github.com/oarkflow/rules/pkg/storage"
 )
 
@@ -48,14 +48,14 @@ type EntitlementContext struct {
 
 func main() {
 	ctx := context.Background()
-	svc := condition.NewService(storage.NewMemoryStore(), condition.Config{Environment: "example", RequireTests: true})
-	if _, err := svc.Publish(ctx, condition.PublishRequest{Name: "subscription-entitlements", Version: "1", Source: policySource, RunTests: true, BaseDir: examplebase.Dir()}); err != nil {
+	svc := rules.NewService(storage.NewMemoryStore(), rules.Config{Environment: "example", RequireTests: true})
+	if _, err := svc.Publish(ctx, rules.PublishRequest{Name: "subscription-entitlements", Version: "1", Source: policySource, RunTests: true, BaseDir: examplebase.Dir()}); err != nil {
 		log.Fatal(err)
 	}
 
 	for _, c := range entitlementChecks() {
 		ent := resolveEntitlement(c)
-		resp, err := svc.Evaluate(ctx, "subscription-entitlements", condition.EvaluateRequest{Decision: "entitlement_check", Input: ent.Facts})
+		resp, err := svc.Evaluate(ctx, "subscription-entitlements", rules.EvaluateRequest{Decision: "entitlement_check", Input: ent.Facts})
 		if err != nil {
 			log.Fatal(err)
 		}

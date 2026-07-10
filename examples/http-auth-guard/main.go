@@ -17,7 +17,7 @@ import (
 	"examples/internal/examplebase"
 
 	"github.com/oarkflow/bcl"
-	"github.com/oarkflow/rules/pkg/condition"
+	"github.com/oarkflow/rules"
 	"github.com/oarkflow/rules/pkg/storage"
 )
 
@@ -50,7 +50,7 @@ type RequestSignals struct {
 }
 
 type AuthGuard struct {
-	service         *condition.Service
+	service         *rules.Service
 	maintenanceMode bool
 	now             time.Time
 	meter           *TrafficMeter
@@ -84,8 +84,8 @@ func main() {
 	flag.Parse()
 
 	ctx := context.Background()
-	svc := condition.NewService(storage.NewMemoryStore(), condition.Config{Environment: "example", RequireTests: true})
-	if _, err := svc.Publish(ctx, condition.PublishRequest{Name: "http-auth-guard", Version: "1", Path: filepath.Join(examplebase.Dir(), "decision.bcl"), RunTests: true}); err != nil {
+	svc := rules.NewService(storage.NewMemoryStore(), rules.Config{Environment: "example", RequireTests: true})
+	if _, err := svc.Publish(ctx, rules.PublishRequest{Name: "http-auth-guard", Version: "1", Path: filepath.Join(examplebase.Dir(), "decision.bcl"), RunTests: true}); err != nil {
 		log.Fatal(err)
 	}
 
@@ -96,7 +96,7 @@ func main() {
 	runDemo(svc)
 }
 
-func runServer(svc *condition.Service, addr string, maintenance bool) {
+func runServer(svc *rules.Service, addr string, maintenance bool) {
 	guard := AuthGuard{service: svc, maintenanceMode: maintenance, now: time.Now(), meter: NewTrafficMeter()}
 	fmt.Printf("HTTP auth guard listening on %s\n", serverBaseURL(addr))
 	fmt.Printf("maintenance=%v\n\n", maintenance)
@@ -108,7 +108,7 @@ func runServer(svc *condition.Service, addr string, maintenance bool) {
 	log.Fatal(http.ListenAndServe(addr, guard.Middleware(routes(svc))))
 }
 
-func runDemo(svc *condition.Service) {
+func runDemo(svc *rules.Service) {
 	for _, c := range requestCases() {
 		guard := AuthGuard{service: svc, maintenanceMode: c.MaintenanceOn, now: time.Date(2026, 5, 24, 10, 30, 0, 0, time.UTC), meter: NewTrafficMeter()}
 		server := httptest.NewServer(guard.Middleware(routes(svc)))
@@ -186,7 +186,7 @@ func serverBaseURL(addr string) string {
 	return "http://" + addr
 }
 
-func routes(svc *condition.Service) http.Handler {
+func routes(svc *rules.Service) http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/_rules", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
@@ -286,7 +286,7 @@ func (g AuthGuard) Middleware(next http.Handler) http.Handler {
 		endpoint := endpointPolicy(r.URL.Path)
 		facts := g.facts(r, principal, endpoint)
 
-		preResp, err := g.service.EvaluateLifecycle(r.Context(), "http-auth-guard", "http_request", condition.LifecycleEvaluateRequest{
+		preResp, err := g.service.EvaluateLifecycle(r.Context(), "http-auth-guard", "http_request", rules.LifecycleEvaluateRequest{
 			Phase:  "pre",
 			Method: r.Method,
 			Path:   r.URL.Path,
@@ -346,7 +346,7 @@ func (g AuthGuard) Middleware(next http.Handler) http.Handler {
 		}
 		rec := &exampleStatusRecorder{ResponseWriter: w, status: http.StatusOK}
 		next.ServeHTTP(rec, r)
-		postResp, err := g.service.EvaluateLifecycle(r.Context(), "http-auth-guard", "http_request", condition.LifecycleEvaluateRequest{
+		postResp, err := g.service.EvaluateLifecycle(r.Context(), "http-auth-guard", "http_request", rules.LifecycleEvaluateRequest{
 			Phase:  "post",
 			Method: r.Method,
 			Path:   r.URL.Path,
@@ -408,14 +408,14 @@ func (r *exampleStatusRecorder) WriteHeader(status int) {
 	r.ResponseWriter.WriteHeader(status)
 }
 
-func firstLifecycleChain(resp *condition.LifecycleEvaluateResponse) *condition.ChainEvaluateResponse {
+func firstLifecycleChain(resp *rules.LifecycleEvaluateResponse) *rules.ChainEvaluateResponse {
 	if resp == nil || len(resp.Evaluation.Chains) == 0 {
 		return nil
 	}
-	return &condition.ChainEvaluateResponse{Evaluation: resp.Evaluation.Chains[0]}
+	return &rules.ChainEvaluateResponse{Evaluation: resp.Evaluation.Chains[0]}
 }
 
-func firstChainDecision(resp *condition.ChainEvaluateResponse, decisions []string, preferNonAllow bool) *bcl.DecisionResult {
+func firstChainDecision(resp *rules.ChainEvaluateResponse, decisions []string, preferNonAllow bool) *bcl.DecisionResult {
 	if resp == nil {
 		return nil
 	}

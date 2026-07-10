@@ -9,7 +9,7 @@ import (
 
 	"examples/internal/examplebase"
 
-	"github.com/oarkflow/rules/pkg/condition"
+	"github.com/oarkflow/rules"
 	"github.com/oarkflow/rules/pkg/storage"
 )
 
@@ -67,14 +67,14 @@ type UnderwritingPacket struct {
 
 func main() {
 	ctx := context.Background()
-	svc := condition.NewService(storage.NewMemoryStore(), condition.Config{Environment: "example", RequireTests: true})
-	if _, err := svc.Publish(ctx, condition.PublishRequest{Name: "loan-eligibility", Version: "1", Source: policySource, RunTests: true, BaseDir: examplebase.Dir()}); err != nil {
+	svc := rules.NewService(storage.NewMemoryStore(), rules.Config{Environment: "example", RequireTests: true})
+	if _, err := svc.Publish(ctx, rules.PublishRequest{Name: "loan-eligibility", Version: "1", Source: policySource, RunTests: true, BaseDir: examplebase.Dir()}); err != nil {
 		log.Fatal(err)
 	}
 
 	for _, c := range applications() {
 		packet := underwrite(c)
-		resp, err := svc.Evaluate(ctx, "loan-eligibility", condition.EvaluateRequest{Decision: "loan_eligibility", Input: packet.Facts})
+		resp, err := svc.Evaluate(ctx, "loan-eligibility", rules.EvaluateRequest{Decision: "loan_eligibility", Input: packet.Facts})
 		if err != nil {
 			log.Fatal(err)
 		}

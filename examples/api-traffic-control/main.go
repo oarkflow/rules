@@ -11,7 +11,7 @@ import (
 
 	"examples/internal/examplebase"
 
-	"github.com/oarkflow/rules/pkg/condition"
+	"github.com/oarkflow/rules"
 	"github.com/oarkflow/rules/pkg/storage"
 )
 
@@ -50,14 +50,14 @@ type EdgeSignals struct {
 
 func main() {
 	ctx := context.Background()
-	svc := condition.NewService(storage.NewMemoryStore(), condition.Config{Environment: "example", RequireTests: true})
-	if _, err := svc.Publish(ctx, condition.PublishRequest{Name: "api-traffic-control", Version: "1", Source: policySource, RunTests: true, BaseDir: examplebase.Dir()}); err != nil {
+	svc := rules.NewService(storage.NewMemoryStore(), rules.Config{Environment: "example", RequireTests: true})
+	if _, err := svc.Publish(ctx, rules.PublishRequest{Name: "api-traffic-control", Version: "1", Source: policySource, RunTests: true, BaseDir: examplebase.Dir()}); err != nil {
 		log.Fatal(err)
 	}
 
 	for _, c := range edgeTraffic() {
 		signals := inspectEdgeRequest(c)
-		resp, err := svc.Evaluate(ctx, "api-traffic-control", condition.EvaluateRequest{Decision: "api_traffic_control", Input: edgeGatewayFacts(c, signals)})
+		resp, err := svc.Evaluate(ctx, "api-traffic-control", rules.EvaluateRequest{Decision: "api_traffic_control", Input: edgeGatewayFacts(c, signals)})
 		if err != nil {
 			log.Fatal(err)
 		}

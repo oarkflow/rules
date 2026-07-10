@@ -8,7 +8,7 @@ import (
 )
 
 func TestLoadConfigBCLProductionExample(t *testing.T) {
-	path := filepath.Join("..", "..", "examples", "production-server", "condition.local.bcl")
+	path := filepath.Join("..", "..", "examples", "production-server", "rules.local.bcl")
 	cfg, err := loadConfig(path)
 	if err != nil {
 		t.Fatal(err)
@@ -35,7 +35,7 @@ func TestLoadConfigBCLProductionExample(t *testing.T) {
 }
 
 func TestProductionExampleAuthzLoads(t *testing.T) {
-	path := filepath.Join("..", "..", "examples", "production-server", "condition.authz")
+	path := filepath.Join("..", "..", "examples", "production-server", "rules.authz")
 	if _, err := server.AuthzEngineFromFile(path); err != nil {
 		t.Fatal(err)
 	}

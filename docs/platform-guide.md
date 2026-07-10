@@ -462,9 +462,9 @@ Every emitted action is persisted. External execution is opt-in.
 Runtime allowlist example in Go:
 
 ```go
-svc := condition.NewService(store, condition.Config{
-  Runtime: condition.RuntimePolicy{
-    ActionAllowlists: []condition.ActionAllowlist{
+svc := rules.NewService(store, rules.Config{
+  Runtime: rules.RuntimePolicy{
+    ActionAllowlists: []rules.ActionAllowlist{
       {
         TenantID: "tenant-a",
         Environment: "production",

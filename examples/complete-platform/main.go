@@ -18,7 +18,7 @@ import (
 	"examples/internal/examplebase"
 
 	"github.com/gofiber/fiber/v3"
-	"github.com/oarkflow/rules/pkg/condition"
+	"github.com/oarkflow/rules"
 	"github.com/oarkflow/rules/pkg/storage"
 )
 
@@ -30,7 +30,7 @@ var demoCredentials = map[string]string{
 }
 
 type completePlatformRuntime struct {
-	service *condition.Service
+	service *rules.Service
 	store   *storage.MemoryStore
 }
 
@@ -74,11 +74,11 @@ func newRuntime() (*completePlatformRuntime, error) {
 
 func newRuntimeWithClock(clock func() time.Time) (*completePlatformRuntime, error) {
 	store := storage.NewMemoryStore()
-	svc := condition.NewService(store, condition.Config{
+	svc := rules.NewService(store, rules.Config{
 		Environment:  "example",
 		RequireTests: true,
 		Clock:        clock,
-		Runtime: condition.RuntimePolicy{ActionAllowlists: []condition.ActionAllowlist{
+		Runtime: rules.RuntimePolicy{ActionAllowlists: []rules.ActionAllowlist{
 			{
 				TenantID:    "default",
 				Environment: "example",
@@ -90,7 +90,7 @@ func newRuntimeWithClock(clock func() time.Time) (*completePlatformRuntime, erro
 			},
 		}},
 	})
-	if _, err := svc.Publish(context.Background(), condition.PublishRequest{
+	if _, err := svc.Publish(context.Background(), rules.PublishRequest{
 		Name:     definitionName,
 		Version:  "1",
 		Path:     filepath.Join(examplebase.Dir(), "decision.bcl"),
@@ -240,8 +240,8 @@ func responseFacts(c fiber.Ctx, status int, responseBody []byte) map[string]any 
 	}
 }
 
-func evaluatePre(c fiber.Ctx, svc *condition.Service, requestFacts map[string]any, actor string) (*condition.LifecycleEvaluateResponse, error) {
-	resp, err := svc.EvaluateLifecycle(c.Context(), definitionName, "http_request", condition.LifecycleEvaluateRequest{
+func evaluatePre(c fiber.Ctx, svc *rules.Service, requestFacts map[string]any, actor string) (*rules.LifecycleEvaluateResponse, error) {
+	resp, err := svc.EvaluateLifecycle(c.Context(), definitionName, "http_request", rules.LifecycleEvaluateRequest{
 		Phase:   "pre",
 		Method:  c.Method(),
 		Path:    c.Path(),
@@ -254,8 +254,8 @@ func evaluatePre(c fiber.Ctx, svc *condition.Service, requestFacts map[string]an
 	return resp, nil
 }
 
-func evaluatePost(c fiber.Ctx, svc *condition.Service, requestFacts map[string]any, actor string, status int, responseBody []byte) (*condition.LifecycleEvaluateResponse, error) {
-	return svc.EvaluateLifecycle(c.Context(), definitionName, "http_request", condition.LifecycleEvaluateRequest{
+func evaluatePost(c fiber.Ctx, svc *rules.Service, requestFacts map[string]any, actor string, status int, responseBody []byte) (*rules.LifecycleEvaluateResponse, error) {
+	return svc.EvaluateLifecycle(c.Context(), definitionName, "http_request", rules.LifecycleEvaluateRequest{
 		Phase:    "post",
 		Method:   c.Method(),
 		Path:     c.Path(),
@@ -274,7 +274,7 @@ func lifecycleInput(actor string) map[string]any {
 	}
 }
 
-func displayAction(e condition.LifecycleEvaluation) string {
+func displayAction(e rules.LifecycleEvaluation) string {
 	if e.Enforcement != nil && e.Enforcement.Action != "" {
 		return e.Enforcement.Action
 	}
@@ -300,7 +300,7 @@ func displayAction(e condition.LifecycleEvaluation) string {
 	return ""
 }
 
-func writeConditionResponse(c fiber.Ctx, env *condition.EnforcementEnvelope) error {
+func writeConditionResponse(c fiber.Ctx, env *rules.EnforcementEnvelope) error {
 	setEnforcementHeaders(c, env)
 	status := env.Status
 	if status == 0 && env.Blocking {
@@ -316,7 +316,7 @@ func writeConditionResponse(c fiber.Ctx, env *condition.EnforcementEnvelope) err
 	return c.JSON(fiber.Map{"action": env.Action, "reason": env.Reason})
 }
 
-func setConditionHeaders(c fiber.Ctx, e condition.LifecycleEvaluation) {
+func setConditionHeaders(c fiber.Ctx, e rules.LifecycleEvaluation) {
 	action := displayAction(e)
 	c.Set("X-Condition-Action", action)
 	c.Set("X-Condition-Reason", e.FinalReason)
@@ -329,7 +329,7 @@ func setConditionHeaders(c fiber.Ctx, e condition.LifecycleEvaluation) {
 	}
 }
 
-func setEnforcementHeaders(c fiber.Ctx, env *condition.EnforcementEnvelope) {
+func setEnforcementHeaders(c fiber.Ctx, env *rules.EnforcementEnvelope) {
 	if env == nil || env.Action == "" {
 		return
 	}

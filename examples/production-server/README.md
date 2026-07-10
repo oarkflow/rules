@@ -4,16 +4,16 @@ This example uses BCL for Condition runtime configuration and the authz DSL for 
 
 ## Files
 
-- `condition.bcl`: hardened HTTPS server config with SQLite, strict validation/evaluation, approval gates, rate limits, trusted proxy CIDRs, and TLS file paths.
-- `condition.local.bcl`: local HTTP variant with the same production safety switches, useful when TLS is terminated by a local proxy or gateway.
-- `condition.authz`: route-scoped roles for admins, publishers, operators, simulators, and auditors.
+- `rules.bcl`: hardened HTTPS server config with SQLite, strict validation/evaluation, approval gates, rate limits, trusted proxy CIDRs, and TLS file paths.
+- `rules.local.bcl`: local HTTP variant with the same production safety switches, useful when TLS is terminated by a local proxy or gateway.
+- `rules.authz`: route-scoped roles for admins, publishers, operators, simulators, and auditors.
 
 ## Run Locally
 
 From the `condition` module:
 
 ```sh
-go run ./cmd/condition serve --config ./examples/production-server/condition.local.bcl
+go run ./cmd/condition serve --config ./examples/production-server/rules.local.bcl
 ```
 
 Check readiness:
@@ -26,7 +26,7 @@ Publish a strict, tested definition:
 
 ```sh
 go run ./cmd/condition publish \
-  --config ./examples/production-server/condition.local.bcl \
+  --config ./examples/production-server/rules.local.bcl \
   --name payment-risk \
   --version 1 \
   --tests \
@@ -60,15 +60,15 @@ curl -H 'X-Roles: condition-operator' \
 Verify the audit chain:
 
 ```sh
-go run ./cmd/condition audit verify --config ./examples/production-server/condition.local.bcl
+go run ./cmd/condition audit verify --config ./examples/production-server/rules.local.bcl
 ```
 
 ## HTTPS Variant
 
-`condition.bcl` expects certificate files at `./examples/production-server/tls/dev.crt` and `./examples/production-server/tls/dev.key`. Generate development-only certificates however your environment normally does, then run:
+`rules.bcl` expects certificate files at `./examples/production-server/tls/dev.crt` and `./examples/production-server/tls/dev.key`. Generate development-only certificates however your environment normally does, then run:
 
 ```sh
-go run ./cmd/condition serve --config ./examples/production-server/condition.bcl
+go run ./cmd/condition serve --config ./examples/production-server/rules.bcl
 ```
 
 In a real deployment, keep TLS keys outside the repository, point `tls.cert_file` and `tls.key_file` to managed secret mounts, and put only trusted gateway CIDRs in `trusted_proxies`.

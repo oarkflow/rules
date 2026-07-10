@@ -16,7 +16,7 @@ import (
 	"time"
 
 	"github.com/oarkflow/bcl"
-	"github.com/oarkflow/rules/pkg/condition"
+	"github.com/oarkflow/rules"
 	"github.com/oarkflow/rules/pkg/server"
 	"github.com/oarkflow/rules/pkg/storage"
 )
@@ -168,7 +168,7 @@ func runPublish(args []string) error {
 		return err
 	}
 	defer closer()
-	resp, err := svc.Publish(cliContext(cfg, *tenant), condition.PublishRequest{Name: *name, Version: *version, Environment: *env, Path: fs.Arg(0), RunTests: *runTests})
+	resp, err := svc.Publish(cliContext(cfg, *tenant), rules.PublishRequest{Name: *name, Version: *version, Environment: *env, Path: fs.Arg(0), RunTests: *runTests})
 	if err != nil {
 		return err
 	}
@@ -204,7 +204,7 @@ func runValidate(args []string) error {
 		return err
 	}
 	defer closer()
-	resp, err := svc.Validate(cliContext(cfg, *tenant), condition.ValidationRequest{Name: *name, Version: *version, Environment: *env, Path: fs.Arg(0), RunTests: *runTests, Bundle: *bundle})
+	resp, err := svc.Validate(cliContext(cfg, *tenant), rules.ValidationRequest{Name: *name, Version: *version, Environment: *env, Path: fs.Arg(0), RunTests: *runTests, Bundle: *bundle})
 	printJSON(resp)
 	return err
 }
@@ -241,7 +241,7 @@ func runEvaluate(args []string) error {
 		return err
 	}
 	defer closer()
-	resp, err := svc.Evaluate(cliContext(cfg, *tenant), fs.Arg(0), condition.EvaluateRequest{Decision: *decision, Input: input, IncludeFeatures: true, Counterfactuals: true})
+	resp, err := svc.Evaluate(cliContext(cfg, *tenant), fs.Arg(0), rules.EvaluateRequest{Decision: *decision, Input: input, IncludeFeatures: true, Counterfactuals: true})
 	if err != nil {
 		return err
 	}
@@ -431,8 +431,8 @@ func runSimulate(args []string, compare bool) error {
 		return err
 	}
 	defer closer()
-	req := condition.SimulationRequest{CandidatePath: *candidate, Decision: *decision, Dataset: *dataset, Cases: cases}
-	var resp *condition.SimulationResponse
+	req := rules.SimulationRequest{CandidatePath: *candidate, Decision: *decision, Dataset: *dataset, Cases: cases}
+	var resp *rules.SimulationResponse
 	if compare {
 		resp, err = svc.Compare(cliContext(cfg, *tenant), fs.Arg(0), req)
 	} else {
@@ -481,8 +481,8 @@ func runCanary(args []string) error {
 		return err
 	}
 	defer closer()
-	resp, err := svc.Canary(cliContext(cfg, *tenant), fs.Arg(0), condition.CanaryRequest{
-		SimulationRequest: condition.SimulationRequest{CandidatePath: *candidate, Decision: *decision, Dataset: *dataset, Cases: cases},
+	resp, err := svc.Canary(cliContext(cfg, *tenant), fs.Arg(0), rules.CanaryRequest{
+		SimulationRequest: rules.SimulationRequest{CandidatePath: *candidate, Decision: *decision, Dataset: *dataset, Cases: cases},
 		MaxChangedCases:   *maxChanged,
 		RequireNoErrors:   *requireNoErrors,
 		Promote:           *promote,
@@ -580,31 +580,31 @@ func runAudit(args []string) error {
 	return nil
 }
 
-func newService(kind, path string) (*condition.Service, func(), error) {
+func newService(kind, path string) (*rules.Service, func(), error) {
 	cfg := RuntimeConfig{}
 	cfg.Store.Kind = kind
 	cfg.Store.Path = path
 	return newServiceFromConfig(cfg)
 }
 
-func newServiceFromConfig(cfg RuntimeConfig) (*condition.Service, func(), error) {
+func newServiceFromConfig(cfg RuntimeConfig) (*rules.Service, func(), error) {
 	kind := cfg.Store.Kind
 	path := cfg.Store.Path
 	switch strings.ToLower(kind) {
 	case "memory":
-		return condition.NewService(storage.NewMemoryStore(), serviceConfig(cfg)), func() {}, nil
+		return rules.NewService(storage.NewMemoryStore(), serviceConfig(cfg)), func() {}, nil
 	case "sqlite":
 		store, err := storage.NewSQLiteStore(path)
 		if err != nil {
 			return nil, nil, err
 		}
-		return condition.NewService(store, serviceConfig(cfg)), func() { _ = store.Close() }, nil
+		return rules.NewService(store, serviceConfig(cfg)), func() { _ = store.Close() }, nil
 	case "file", "":
 		store, err := storage.NewFileStore(path)
 		if err != nil {
 			return nil, nil, err
 		}
-		return condition.NewService(store, serviceConfig(cfg)), func() {}, nil
+		return rules.NewService(store, serviceConfig(cfg)), func() {}, nil
 	default:
 		return nil, nil, fmt.Errorf("unknown store kind %q", kind)
 	}
@@ -683,8 +683,8 @@ func loadConfig(path string) (RuntimeConfig, error) {
 	return cfg, errors.New("unsupported config file format, must be .json or .bcl")
 }
 
-func serviceConfig(cfg RuntimeConfig) condition.Config {
-	out := condition.Config{
+func serviceConfig(cfg RuntimeConfig) rules.Config {
+	out := rules.Config{
 		Environment:               cfg.Service.Environment,
 		DefaultTenant:             cfg.Service.DefaultTenant,
 		MaxRequestBytes:           cfg.Service.MaxRequestBytes,
@@ -698,7 +698,7 @@ func serviceConfig(cfg RuntimeConfig) condition.Config {
 			out.RequestTimeout = d
 		}
 	}
-	out.Runtime = condition.RuntimePolicy{
+	out.Runtime = rules.RuntimePolicy{
 		AllowTime:              cfg.Service.Runtime.AllowTime,
 		FixedTime:              cfg.Service.Runtime.FixedTime,
 		AllowEnv:               cfg.Service.Runtime.AllowEnv,
@@ -715,7 +715,7 @@ func serviceConfig(cfg RuntimeConfig) condition.Config {
 }
 
 func cliContext(cfg RuntimeConfig, tenant string) context.Context {
-	return condition.ContextWithTenant(context.Background(), firstNonEmpty(tenant, cfg.Service.DefaultTenant, "default"))
+	return rules.ContextWithTenant(context.Background(), firstNonEmpty(tenant, cfg.Service.DefaultTenant, "default"))
 }
 
 func firstNonEmpty(values ...string) string {
@@ -762,7 +762,7 @@ func printJSON(v any) {
 
 func usage() {
 	fmt.Println(`condition commands:
-  serve [--config condition.yaml] [--tls-cert cert.pem --tls-key key.pem]
+  serve [--config rules.yaml] [--tls-cert cert.pem --tls-key key.pem]
   validate <decision.bcl>
   publish <decision.bcl>
   versions <definition>

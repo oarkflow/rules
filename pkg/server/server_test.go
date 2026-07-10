@@ -13,12 +13,12 @@ import (
 
 	"github.com/oarkflow/authz"
 	authzstores "github.com/oarkflow/authz/pkg/stores"
-	"github.com/oarkflow/rules/pkg/condition"
+	"github.com/oarkflow/rules"
 	"github.com/oarkflow/rules/pkg/storage"
 )
 
 func TestServerPublishEvaluateAndAudit(t *testing.T) {
-	svc := condition.NewService(storage.NewMemoryStore(), condition.Config{})
+	svc := rules.NewService(storage.NewMemoryStore(), rules.Config{})
 	handler := New(svc).Handler()
 	source := `module "demo" {
   decision_table "access" {
@@ -59,7 +59,7 @@ func TestServerPublishEvaluateAndAudit(t *testing.T) {
 }
 
 func TestServerEvaluateChain(t *testing.T) {
-	svc := condition.NewService(storage.NewMemoryStore(), condition.Config{})
+	svc := rules.NewService(storage.NewMemoryStore(), rules.Config{})
 	handler := New(svc).Handler()
 	source := `module "chain-demo" {
   decision_table "access" {
@@ -82,7 +82,7 @@ func TestServerEvaluateChain(t *testing.T) {
     }
   }
 }`
-	if _, err := svc.Publish(context.Background(), condition.PublishRequest{Name: "chain-demo", Source: source}); err != nil {
+	if _, err := svc.Publish(context.Background(), rules.PublishRequest{Name: "chain-demo", Source: source}); err != nil {
 		t.Fatal(err)
 	}
 	body, _ := json.Marshal(map[string]any{
@@ -97,7 +97,7 @@ func TestServerEvaluateChain(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("chain evaluate status %d: %s", rec.Code, rec.Body.String())
 	}
-	var resp condition.ChainEvaluateResponse
+	var resp rules.ChainEvaluateResponse
 	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
 		t.Fatal(err)
 	}
@@ -107,7 +107,7 @@ func TestServerEvaluateChain(t *testing.T) {
 }
 
 func TestServerEvaluateLifecycle(t *testing.T) {
-	svc := condition.NewService(storage.NewMemoryStore(), condition.Config{})
+	svc := rules.NewService(storage.NewMemoryStore(), rules.Config{})
 	handler := New(svc).Handler()
 	source := `module "lifecycle-demo" {
   routes "http" {
@@ -140,7 +140,7 @@ func TestServerEvaluateLifecycle(t *testing.T) {
     }
   }
 }`
-	if _, err := svc.Publish(context.Background(), condition.PublishRequest{Name: "lifecycle-demo", Source: source}); err != nil {
+	if _, err := svc.Publish(context.Background(), rules.PublishRequest{Name: "lifecycle-demo", Source: source}); err != nil {
 		t.Fatal(err)
 	}
 	body, _ := json.Marshal(map[string]any{
@@ -158,7 +158,7 @@ func TestServerEvaluateLifecycle(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("lifecycle evaluate status %d: %s", rec.Code, rec.Body.String())
 	}
-	var resp condition.LifecycleEvaluateResponse
+	var resp rules.LifecycleEvaluateResponse
 	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
 		t.Fatal(err)
 	}
@@ -202,7 +202,7 @@ func TestServerEvaluateLifecycle(t *testing.T) {
 	if coverageRec.Code != http.StatusOK {
 		t.Fatalf("coverage status %d: %s", coverageRec.Code, coverageRec.Body.String())
 	}
-	var coverage condition.RouteCoverageReport
+	var coverage rules.RouteCoverageReport
 	if err := json.Unmarshal(coverageRec.Body.Bytes(), &coverage); err != nil {
 		t.Fatal(err)
 	}
@@ -212,7 +212,7 @@ func TestServerEvaluateLifecycle(t *testing.T) {
 }
 
 func TestServerEvaluatePopulatesRuntimeContextFromHeaders(t *testing.T) {
-	svc := condition.NewService(storage.NewMemoryStore(), condition.Config{})
+	svc := rules.NewService(storage.NewMemoryStore(), rules.Config{})
 	handler := New(svc).Handler()
 	source := `module "runtime" {
   decision_table "access" {
@@ -226,7 +226,7 @@ func TestServerEvaluatePopulatesRuntimeContextFromHeaders(t *testing.T) {
     }
   }
 }`
-	if _, err := svc.Publish(condition.ContextWithTenant(context.Background(), "tenant-1"), condition.PublishRequest{Name: "runtime", Source: source}); err != nil {
+	if _, err := svc.Publish(rules.ContextWithTenant(context.Background(), "tenant-1"), rules.PublishRequest{Name: "runtime", Source: source}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -250,7 +250,7 @@ func TestServerEvaluatePopulatesRuntimeContextFromHeaders(t *testing.T) {
 }
 
 func TestServerEvaluateHeaderContextOverridesBodyContext(t *testing.T) {
-	svc := condition.NewService(storage.NewMemoryStore(), condition.Config{})
+	svc := rules.NewService(storage.NewMemoryStore(), rules.Config{})
 	handler := New(svc).Handler()
 	source := `module "runtime" {
   decision_table "access" {
@@ -264,7 +264,7 @@ func TestServerEvaluateHeaderContextOverridesBodyContext(t *testing.T) {
     }
   }
 }`
-	if _, err := svc.Publish(condition.ContextWithTenant(context.Background(), "header-tenant"), condition.PublishRequest{Name: "runtime", Source: source}); err != nil {
+	if _, err := svc.Publish(rules.ContextWithTenant(context.Background(), "header-tenant"), rules.PublishRequest{Name: "runtime", Source: source}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -291,7 +291,7 @@ func TestServerEvaluateHeaderContextOverridesBodyContext(t *testing.T) {
 }
 
 func TestServerEvaluateExposesSanitizedHeadersToRequestHeaderFunction(t *testing.T) {
-	svc := condition.NewService(storage.NewMemoryStore(), condition.Config{})
+	svc := rules.NewService(storage.NewMemoryStore(), rules.Config{})
 	handler := New(svc).Handler()
 	source := `module "runtime" {
   decision_table "access" {
@@ -305,7 +305,7 @@ func TestServerEvaluateExposesSanitizedHeadersToRequestHeaderFunction(t *testing
     }
   }
 }`
-	if _, err := svc.Publish(context.Background(), condition.PublishRequest{Name: "runtime", Source: source}); err != nil {
+	if _, err := svc.Publish(context.Background(), rules.PublishRequest{Name: "runtime", Source: source}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -338,7 +338,7 @@ func reasonCodeFromEvaluateResponse(t *testing.T, payload []byte) string {
 }
 
 func TestServerRequiresAuthz(t *testing.T) {
-	svc := condition.NewService(storage.NewMemoryStore(), condition.Config{})
+	svc := rules.NewService(storage.NewMemoryStore(), rules.Config{})
 	handler := New(svc).Handler()
 	req := httptest.NewRequest(http.MethodGet, "/v1/definitions", nil)
 	rec := httptest.NewRecorder()
@@ -349,7 +349,7 @@ func TestServerRequiresAuthz(t *testing.T) {
 }
 
 func TestServerRejectsOversizedBody(t *testing.T) {
-	svc := condition.NewService(storage.NewMemoryStore(), condition.Config{})
+	svc := rules.NewService(storage.NewMemoryStore(), rules.Config{})
 	handler := New(svc, WithMaxBody(8)).Handler()
 	req := httptest.NewRequest(http.MethodPost, "/v1/definitions", bytes.NewReader([]byte(`{"source":"too large"}`)))
 	req.Header.Set("Content-Type", "application/json")
@@ -362,7 +362,7 @@ func TestServerRejectsOversizedBody(t *testing.T) {
 }
 
 func TestServerOnlyTrustsForwardedIPFromConfiguredProxy(t *testing.T) {
-	svc := condition.NewService(storage.NewMemoryStore(), condition.Config{})
+	svc := rules.NewService(storage.NewMemoryStore(), rules.Config{})
 	srv := New(svc)
 	req := httptest.NewRequest(http.MethodGet, "/healthz", nil)
 	req.RemoteAddr = "10.0.0.10:1234"
@@ -378,7 +378,7 @@ func TestServerOnlyTrustsForwardedIPFromConfiguredProxy(t *testing.T) {
 }
 
 func TestWithTrustedProxiesAcceptsSingleIP(t *testing.T) {
-	svc := condition.NewService(storage.NewMemoryStore(), condition.Config{})
+	svc := rules.NewService(storage.NewMemoryStore(), rules.Config{})
 	srv := New(svc, WithTrustedProxies([]string{"10.0.0.10"}))
 	req := httptest.NewRequest(http.MethodGet, "/healthz", nil)
 	req.RemoteAddr = "10.0.0.10:1234"
@@ -389,7 +389,7 @@ func TestWithTrustedProxiesAcceptsSingleIP(t *testing.T) {
 }
 
 func TestServerRolePermissions(t *testing.T) {
-	svc := condition.NewService(storage.NewMemoryStore(), condition.Config{})
+	svc := rules.NewService(storage.NewMemoryStore(), rules.Config{})
 	handler := New(svc).Handler()
 	req := httptest.NewRequest(http.MethodGet, "/v1/audits", nil)
 	req.Header.Set("X-Roles", "condition-auditor")
@@ -410,7 +410,7 @@ func TestServerRolePermissions(t *testing.T) {
 }
 
 func TestServerDynamicRouteAuthzUsesCanonicalPattern(t *testing.T) {
-	svc := condition.NewService(storage.NewMemoryStore(), condition.Config{})
+	svc := rules.NewService(storage.NewMemoryStore(), rules.Config{})
 	source := `module "demo" {
   decision_table "access" {
     default deny
@@ -418,7 +418,7 @@ func TestServerDynamicRouteAuthzUsesCanonicalPattern(t *testing.T) {
     row "allow-ok" { when { request.ok == true } then { decision allow reason "ok" } reason "ok" reason_code "OK" }
   }
 }`
-	if _, err := svc.Publish(context.Background(), condition.PublishRequest{Name: "demo", Source: source}); err != nil {
+	if _, err := svc.Publish(context.Background(), rules.PublishRequest{Name: "demo", Source: source}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -460,7 +460,7 @@ func TestServerDynamicRouteAuthzUsesCanonicalPattern(t *testing.T) {
 }
 
 func TestRoutePatternResourceUsesFiberStyleAndParams(t *testing.T) {
-	svc := condition.NewService(storage.NewMemoryStore(), condition.Config{})
+	svc := rules.NewService(storage.NewMemoryStore(), rules.Config{})
 	srv := New(svc)
 	req := httptest.NewRequest(http.MethodPost, "/v1/definitions/demo/workflows/manual/start", nil)
 	resource := srv.routeResourceFromRequest(req)
@@ -486,7 +486,7 @@ func TestRouteMatcherSupportsFiberAndWildcardPatterns(t *testing.T) {
 }
 
 func TestServerLifecycleValidationReportsAndAuditVerify(t *testing.T) {
-	svc := condition.NewService(storage.NewMemoryStore(), condition.Config{})
+	svc := rules.NewService(storage.NewMemoryStore(), rules.Config{})
 	handler := New(svc).Handler()
 	sourceV1 := `module "demo" { decision_table "access" { default deny hit_policy first row "allow" { when { request.ok == true } then { decision allow reason "ok" } reason "ok" reason_code "OK" } } }`
 	sourceV2 := `module "demo" { decision_table "access" { default deny hit_policy first row "deny" { when { request.ok == true } then { decision deny reason "changed" } reason "changed" reason_code "CHANGED" } } }`
@@ -556,7 +556,7 @@ func TestServerLifecycleValidationReportsAndAuditVerify(t *testing.T) {
 }
 
 func TestServerWorkflowAndReports(t *testing.T) {
-	svc := condition.NewService(storage.NewMemoryStore(), condition.Config{})
+	svc := rules.NewService(storage.NewMemoryStore(), rules.Config{})
 	handler := New(svc).Handler()
 	source := `module "workflow-demo" {
   decision_table "case" { default require_review row "review" { when { case.open == true } then { decision require_review } } }
@@ -585,7 +585,7 @@ func TestServerWorkflowAndReports(t *testing.T) {
 	if rec.Code != http.StatusCreated {
 		t.Fatalf("workflow start %d: %s", rec.Code, rec.Body.String())
 	}
-	var run condition.WorkflowRun
+	var run rules.WorkflowRun
 	if err := json.Unmarshal(rec.Body.Bytes(), &run); err != nil {
 		t.Fatal(err)
 	}
@@ -608,7 +608,7 @@ func TestServerWorkflowAndReports(t *testing.T) {
 }
 
 func TestServerMetricsAndRateLimit(t *testing.T) {
-	svc := condition.NewService(storage.NewMemoryStore(), condition.Config{})
+	svc := rules.NewService(storage.NewMemoryStore(), rules.Config{})
 	handler := New(svc, WithRateLimit(1, time.Minute)).Handler()
 
 	req := httptest.NewRequest(http.MethodGet, "/v1/metrics", nil)
@@ -638,7 +638,7 @@ func TestServerMetricsAndRateLimit(t *testing.T) {
 }
 
 func TestServerProductionLifecycleEndpoints(t *testing.T) {
-	svc := condition.NewService(storage.NewMemoryStore(), condition.Config{
+	svc := rules.NewService(storage.NewMemoryStore(), rules.Config{
 		StrictValidation:          true,
 		StrictEvaluation:          true,
 		RequireTests:              true,
@@ -737,7 +737,7 @@ module "demo" {
 }
 
 func TestServerUsesServiceConfigDefaults(t *testing.T) {
-	svc := condition.NewService(storage.NewMemoryStore(), condition.Config{MaxRequestBytes: 8})
+	svc := rules.NewService(storage.NewMemoryStore(), rules.Config{MaxRequestBytes: 8})
 	handler := New(svc).Handler()
 	req := httptest.NewRequest(http.MethodPost, "/v1/definitions", bytes.NewReader([]byte(`{"source":"too large"}`)))
 	req.Header.Set("Content-Type", "application/json")

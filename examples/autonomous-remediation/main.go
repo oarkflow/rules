@@ -8,7 +8,7 @@ import (
 
 	"examples/internal/examplebase"
 
-	"github.com/oarkflow/rules/pkg/condition"
+	"github.com/oarkflow/rules"
 	"github.com/oarkflow/rules/pkg/storage"
 )
 
@@ -48,14 +48,14 @@ type RemediationPlan struct {
 
 func main() {
 	ctx := context.Background()
-	svc := condition.NewService(storage.NewMemoryStore(), condition.Config{Environment: "example", RequireTests: true})
-	if _, err := svc.Publish(ctx, condition.PublishRequest{Name: "autonomous-remediation", Version: "1", Source: policySource, RunTests: true, BaseDir: examplebase.Dir()}); err != nil {
+	svc := rules.NewService(storage.NewMemoryStore(), rules.Config{Environment: "example", RequireTests: true})
+	if _, err := svc.Publish(ctx, rules.PublishRequest{Name: "autonomous-remediation", Version: "1", Source: policySource, RunTests: true, BaseDir: examplebase.Dir()}); err != nil {
 		log.Fatal(err)
 	}
 
 	for _, c := range remediationCases() {
 		plan := buildPlan(c)
-		resp, err := svc.Evaluate(ctx, "autonomous-remediation", condition.EvaluateRequest{Decision: "autonomous_remediation", Input: plan.Facts})
+		resp, err := svc.Evaluate(ctx, "autonomous-remediation", rules.EvaluateRequest{Decision: "autonomous_remediation", Input: plan.Facts})
 		if err != nil {
 			log.Fatal(err)
 		}

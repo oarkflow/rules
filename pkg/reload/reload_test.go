@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	condition "github.com/oarkflow/rules/pkg/condition"
+	"github.com/oarkflow/rules"
 	"github.com/oarkflow/rules/pkg/storage"
 )
 
@@ -17,14 +17,14 @@ func TestWatcherReloadsImportedBCLFile(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	dir, root := writeReloadFixture(t, allowDecisionSource())
-	svc := condition.NewService(storage.NewMemoryStore(), condition.Config{})
-	if _, err := svc.Publish(ctx, condition.PublishRequest{Name: "demo", Path: root}); err != nil {
+	svc := rules.NewService(storage.NewMemoryStore(), rules.Config{})
+	if _, err := svc.Publish(ctx, rules.PublishRequest{Name: "demo", Path: root}); err != nil {
 		t.Fatal(err)
 	}
 
-	reloads := make(chan *condition.ReloadResponse, 4)
+	reloads := make(chan *rules.ReloadResponse, 4)
 	go func() {
-		_ = (Watcher{Service: svc}).Watch(ctx, condition.ReloadRequest{Name: "demo", DebounceMillis: 50}, func(resp *condition.ReloadResponse) {
+		_ = (Watcher{Service: svc}).Watch(ctx, rules.ReloadRequest{Name: "demo", DebounceMillis: 50}, func(resp *rules.ReloadResponse) {
 			reloads <- resp
 		})
 	}()
@@ -41,7 +41,7 @@ func TestWatcherReloadsImportedBCLFile(t *testing.T) {
 	if !strings.HasSuffix(resp.ChangedPath, "access.bcl") && !strings.HasSuffix(resp.DependencyPath, "access.bcl") {
 		t.Fatalf("expected imported path in response, got changed=%q dependency=%q", resp.ChangedPath, resp.DependencyPath)
 	}
-	eval, err := svc.Evaluate(ctx, "demo", condition.EvaluateRequest{Decision: "access", Input: map[string]any{"request": map[string]any{"ok": true}}})
+	eval, err := svc.Evaluate(ctx, "demo", rules.EvaluateRequest{Decision: "access", Input: map[string]any{"request": map[string]any{"ok": true}}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -54,14 +54,14 @@ func TestWatcherKeepsLastKnownGoodForInvalidImportedBCL(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	dir, root := writeReloadFixture(t, allowDecisionSourceWithTest())
-	svc := condition.NewService(storage.NewMemoryStore(), condition.Config{})
-	if _, err := svc.Publish(ctx, condition.PublishRequest{Name: "demo", Path: root, RunTests: true}); err != nil {
+	svc := rules.NewService(storage.NewMemoryStore(), rules.Config{})
+	if _, err := svc.Publish(ctx, rules.PublishRequest{Name: "demo", Path: root, RunTests: true}); err != nil {
 		t.Fatal(err)
 	}
 
-	reloads := make(chan *condition.ReloadResponse, 4)
+	reloads := make(chan *rules.ReloadResponse, 4)
 	go func() {
-		_ = (Watcher{Service: svc}).Watch(ctx, condition.ReloadRequest{Name: "demo", RunTests: true, DebounceMillis: 50}, func(resp *condition.ReloadResponse) {
+		_ = (Watcher{Service: svc}).Watch(ctx, rules.ReloadRequest{Name: "demo", RunTests: true, DebounceMillis: 50}, func(resp *rules.ReloadResponse) {
 			reloads <- resp
 		})
 	}()
@@ -74,7 +74,7 @@ func TestWatcherKeepsLastKnownGoodForInvalidImportedBCL(t *testing.T) {
 	if resp == nil || resp.Reloaded || !resp.KeptLast {
 		t.Fatalf("reload response = %#v", resp)
 	}
-	eval, err := svc.Evaluate(ctx, "demo", condition.EvaluateRequest{Decision: "access", Input: map[string]any{"request": map[string]any{"ok": true}}})
+	eval, err := svc.Evaluate(ctx, "demo", rules.EvaluateRequest{Decision: "access", Input: map[string]any{"request": map[string]any{"ok": true}}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -90,15 +90,15 @@ func TestWatcherReloadsRootAndDebouncesBursts(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, "rules", "deny.bcl"), []byte(denyDecisionSource()), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	svc := condition.NewService(storage.NewMemoryStore(), condition.Config{})
-	if _, err := svc.Publish(ctx, condition.PublishRequest{Name: "demo", Path: root}); err != nil {
+	svc := rules.NewService(storage.NewMemoryStore(), rules.Config{})
+	if _, err := svc.Publish(ctx, rules.PublishRequest{Name: "demo", Path: root}); err != nil {
 		t.Fatal(err)
 	}
 
-	reloads := make(chan *condition.ReloadResponse, 8)
+	reloads := make(chan *rules.ReloadResponse, 8)
 	var count atomic.Int32
 	go func() {
-		_ = (Watcher{Service: svc}).Watch(ctx, condition.ReloadRequest{Name: "demo", DebounceMillis: 100}, func(resp *condition.ReloadResponse) {
+		_ = (Watcher{Service: svc}).Watch(ctx, rules.ReloadRequest{Name: "demo", DebounceMillis: 100}, func(resp *rules.ReloadResponse) {
 			count.Add(1)
 			reloads <- resp
 		})
@@ -120,7 +120,7 @@ func TestWatcherReloadsRootAndDebouncesBursts(t *testing.T) {
 	if count.Load() != 1 {
 		t.Fatalf("reload callback count = %d, want 1", count.Load())
 	}
-	eval, err := svc.Evaluate(ctx, "demo", condition.EvaluateRequest{Decision: "access", Input: map[string]any{"request": map[string]any{"ok": true}}})
+	eval, err := svc.Evaluate(ctx, "demo", rules.EvaluateRequest{Decision: "access", Input: map[string]any{"request": map[string]any{"ok": true}}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -131,11 +131,11 @@ func TestWatcherReloadsRootAndDebouncesBursts(t *testing.T) {
 
 func TestWatcherRejectsSourceOnlyDefinition(t *testing.T) {
 	ctx := context.Background()
-	svc := condition.NewService(storage.NewMemoryStore(), condition.Config{})
-	if _, err := svc.Publish(ctx, condition.PublishRequest{Name: "demo", Source: rootSourceInline(allowDecisionSource())}); err != nil {
+	svc := rules.NewService(storage.NewMemoryStore(), rules.Config{})
+	if _, err := svc.Publish(ctx, rules.PublishRequest{Name: "demo", Source: rootSourceInline(allowDecisionSource())}); err != nil {
 		t.Fatal(err)
 	}
-	err := (Watcher{Service: svc}).Watch(ctx, condition.ReloadRequest{Name: "demo"}, nil)
+	err := (Watcher{Service: svc}).Watch(ctx, rules.ReloadRequest{Name: "demo"}, nil)
 	if err == nil || !strings.Contains(err.Error(), "cannot be file-watched") {
 		t.Fatalf("watch error = %v", err)
 	}
@@ -241,7 +241,7 @@ test "allow_ok" {
 }`
 }
 
-func waitReload(t *testing.T, reloads <-chan *condition.ReloadResponse) *condition.ReloadResponse {
+func waitReload(t *testing.T, reloads <-chan *rules.ReloadResponse) *rules.ReloadResponse {
 	t.Helper()
 	select {
 	case resp := <-reloads:

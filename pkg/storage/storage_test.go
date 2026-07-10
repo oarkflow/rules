@@ -195,7 +195,7 @@ PRIMARY KEY(name, environment)
 }
 
 func TestSQLiteStoreConfiguresOperationalPragmas(t *testing.T) {
-	store, err := NewSQLiteStore(filepath.Join(t.TempDir(), "condition.db"))
+	store, err := NewSQLiteStore(filepath.Join(t.TempDir(), "rules.db"))
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -9,15 +9,15 @@ import (
 	"time"
 
 	"github.com/oarkflow/bcl"
-	"github.com/oarkflow/rules/pkg/condition"
+	"github.com/oarkflow/rules"
 )
 
 type Watcher struct {
-	Service  *condition.Service
+	Service  *rules.Service
 	Interval time.Duration
 }
 
-func (w Watcher) Watch(ctx context.Context, req condition.ReloadRequest, onReload func(*condition.ReloadResponse)) error {
+func (w Watcher) Watch(ctx context.Context, req rules.ReloadRequest, onReload func(*rules.ReloadResponse)) error {
 	if w.Service == nil {
 		return nil
 	}
@@ -115,7 +115,7 @@ func (w Watcher) Watch(ctx context.Context, req condition.ReloadRequest, onReloa
 	}
 }
 
-func (w Watcher) rootPath(ctx context.Context, req condition.ReloadRequest) (string, error) {
+func (w Watcher) rootPath(ctx context.Context, req rules.ReloadRequest) (string, error) {
 	if req.Path != "" {
 		return req.Path, nil
 	}

@@ -8,7 +8,7 @@ import (
 
 	"examples/internal/examplebase"
 
-	"github.com/oarkflow/rules/pkg/condition"
+	"github.com/oarkflow/rules"
 	"github.com/oarkflow/rules/pkg/storage"
 )
 
@@ -40,14 +40,14 @@ type GraphFeatures struct {
 
 func main() {
 	ctx := context.Background()
-	svc := condition.NewService(storage.NewMemoryStore(), condition.Config{Environment: "example", RequireTests: true})
-	if _, err := svc.Publish(ctx, condition.PublishRequest{Name: "fraud-ring-graph", Version: "1", Source: policySource, RunTests: true, BaseDir: examplebase.Dir()}); err != nil {
+	svc := rules.NewService(storage.NewMemoryStore(), rules.Config{Environment: "example", RequireTests: true})
+	if _, err := svc.Publish(ctx, rules.PublishRequest{Name: "fraud-ring-graph", Version: "1", Source: policySource, RunTests: true, BaseDir: examplebase.Dir()}); err != nil {
 		log.Fatal(err)
 	}
 
 	for _, c := range graphCases() {
 		features := buildGraphFeatures(c)
-		resp, err := svc.Evaluate(ctx, "fraud-ring-graph", condition.EvaluateRequest{Decision: "fraud_ring_graph", Input: features.Facts})
+		resp, err := svc.Evaluate(ctx, "fraud-ring-graph", rules.EvaluateRequest{Decision: "fraud_ring_graph", Input: features.Facts})
 		if err != nil {
 			log.Fatal(err)
 		}

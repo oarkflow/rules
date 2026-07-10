@@ -12,7 +12,7 @@ import (
 
 	"examples/internal/examplebase"
 
-	"github.com/oarkflow/rules/pkg/condition"
+	"github.com/oarkflow/rules"
 	"github.com/oarkflow/rules/pkg/storage"
 )
 
@@ -70,14 +70,14 @@ type EvidencePackage struct {
 
 func main() {
 	ctx := context.Background()
-	svc := condition.NewService(storage.NewMemoryStore(), condition.Config{Environment: "example", RequireTests: true})
-	if _, err := svc.Publish(ctx, condition.PublishRequest{Name: "kyc-onboarding", Version: "1", Source: policySource, RunTests: true, BaseDir: examplebase.Dir()}); err != nil {
+	svc := rules.NewService(storage.NewMemoryStore(), rules.Config{Environment: "example", RequireTests: true})
+	if _, err := svc.Publish(ctx, rules.PublishRequest{Name: "kyc-onboarding", Version: "1", Source: policySource, RunTests: true, BaseDir: examplebase.Dir()}); err != nil {
 		log.Fatal(err)
 	}
 
 	for _, file := range onboardingQueue() {
 		evidence := buildEvidence(file, time.Date(2026, 5, 24, 0, 0, 0, 0, time.UTC))
-		resp, err := svc.Evaluate(ctx, "kyc-onboarding", condition.EvaluateRequest{Decision: "kyc_onboarding", Input: evidence.Facts()})
+		resp, err := svc.Evaluate(ctx, "kyc-onboarding", rules.EvaluateRequest{Decision: "kyc_onboarding", Input: evidence.Facts()})
 		if err != nil {
 			log.Fatal(err)
 		}

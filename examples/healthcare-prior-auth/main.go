@@ -11,7 +11,7 @@ import (
 
 	"examples/internal/examplebase"
 
-	"github.com/oarkflow/rules/pkg/condition"
+	"github.com/oarkflow/rules"
 	"github.com/oarkflow/rules/pkg/storage"
 )
 
@@ -59,14 +59,14 @@ type ClinicalPacket struct {
 
 func main() {
 	ctx := context.Background()
-	svc := condition.NewService(storage.NewMemoryStore(), condition.Config{Environment: "example", RequireTests: true})
-	if _, err := svc.Publish(ctx, condition.PublishRequest{Name: "healthcare-prior-auth", Version: "1", Source: policySource, RunTests: true, BaseDir: examplebase.Dir()}); err != nil {
+	svc := rules.NewService(storage.NewMemoryStore(), rules.Config{Environment: "example", RequireTests: true})
+	if _, err := svc.Publish(ctx, rules.PublishRequest{Name: "healthcare-prior-auth", Version: "1", Source: policySource, RunTests: true, BaseDir: examplebase.Dir()}); err != nil {
 		log.Fatal(err)
 	}
 
 	for _, c := range utilizationReviewQueue() {
 		packet := assembleClinicalPacket(c)
-		resp, err := svc.Evaluate(ctx, "healthcare-prior-auth", condition.EvaluateRequest{Decision: "prior_auth", Input: packet.Facts})
+		resp, err := svc.Evaluate(ctx, "healthcare-prior-auth", rules.EvaluateRequest{Decision: "prior_auth", Input: packet.Facts})
 		if err != nil {
 			log.Fatal(err)
 		}

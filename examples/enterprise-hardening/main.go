@@ -8,7 +8,7 @@ import (
 	"runtime"
 	"time"
 
-	"github.com/oarkflow/rules/pkg/condition"
+	"github.com/oarkflow/rules"
 	"github.com/oarkflow/rules/pkg/storage"
 )
 
@@ -16,13 +16,13 @@ func main() {
 	_, file, _, _ := runtime.Caller(0)
 	dir := filepath.Dir(file)
 	ctx := context.Background()
-	svc := condition.NewService(storage.NewMemoryStore(), condition.Config{
+	svc := rules.NewService(storage.NewMemoryStore(), rules.Config{
 		Environment:      "production",
 		DefaultTenant:    "default",
 		StrictValidation: true,
 		StrictEvaluation: true,
 		RequireTests:     true,
-		Runtime: condition.RuntimePolicy{
+		Runtime: rules.RuntimePolicy{
 			FixedTime:              "2026-05-26T00:00:00Z",
 			AllowedDatasetAdapters: []string{"file"},
 			AllowedHTTPMethods:     []string{"GET"},
@@ -31,8 +31,8 @@ func main() {
 	})
 
 	for _, tenant := range []string{"acme", "globex"} {
-		tenantCtx := condition.ContextWithTenant(ctx, tenant)
-		if _, err := svc.Publish(tenantCtx, condition.PublishRequest{
+		tenantCtx := rules.ContextWithTenant(ctx, tenant)
+		if _, err := svc.Publish(tenantCtx, rules.PublishRequest{
 			Name:     "enterprise-hardening",
 			Version:  "1",
 			Path:     filepath.Join(dir, "decision.bcl"),
@@ -46,8 +46,8 @@ func main() {
 		}
 	}
 
-	evalCtx := condition.ContextWithTenant(ctx, "acme")
-	eval, err := svc.Evaluate(evalCtx, "enterprise-hardening", condition.EvaluateRequest{
+	evalCtx := rules.ContextWithTenant(ctx, "acme")
+	eval, err := svc.Evaluate(evalCtx, "enterprise-hardening", rules.EvaluateRequest{
 		Decision: "access",
 		Input: map[string]any{
 			"request": map[string]any{
@@ -61,8 +61,8 @@ func main() {
 	}
 	fmt.Printf("tenant=%s effect=%s reason_code=%s\n", eval.Audit.TenantID, eval.Report.Decision.Effect, eval.Report.Decision.ReasonCode)
 
-	canary, err := svc.Canary(evalCtx, "enterprise-hardening", condition.CanaryRequest{
-		SimulationRequest: condition.SimulationRequest{
+	canary, err := svc.Canary(evalCtx, "enterprise-hardening", rules.CanaryRequest{
+		SimulationRequest: rules.SimulationRequest{
 			CandidatePath: filepath.Join(dir, "candidate.bcl"),
 			Decision:      "access",
 			Dataset:       "canary_cases",
@@ -74,7 +74,7 @@ func main() {
 	}
 	fmt.Printf("canary_passed=%v changed_cases=%d\n", canary.Passed, canary.ChangedCases)
 
-	if _, err := svc.Evaluate(condition.ContextWithTenant(ctx, "initech"), "enterprise-hardening", condition.EvaluateRequest{Decision: "access"}); err != nil {
+	if _, err := svc.Evaluate(rules.ContextWithTenant(ctx, "initech"), "enterprise-hardening", rules.EvaluateRequest{Decision: "access"}); err != nil {
 		fmt.Printf("isolated_tenant_error=%s\n", err)
 	}
 }

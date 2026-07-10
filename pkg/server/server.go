@@ -16,13 +16,13 @@ import (
 	"github.com/oarkflow/authz"
 	authzmw "github.com/oarkflow/authz/pkg/middleware"
 	authzstores "github.com/oarkflow/authz/pkg/stores"
-	"github.com/oarkflow/rules/pkg/condition"
+	"github.com/oarkflow/rules"
 	"github.com/oarkflow/rules/pkg/routing"
 	"github.com/oarkflow/rules/pkg/storage"
 )
 
 type Server struct {
-	service        *condition.Service
+	service        *rules.Service
 	authz          *authz.Engine
 	maxBody        int64
 	timeout        time.Duration
@@ -31,7 +31,7 @@ type Server struct {
 	trustedProxies []*net.IPNet
 	logf           func(format string, args ...any)
 	routeMatcher   *routing.Matcher
-	redactConfig   *condition.PIIRedactionConfig
+	redactConfig   *rules.PIIRedactionConfig
 }
 
 type Option func(*Server)
@@ -60,7 +60,7 @@ func WithLogger(logf func(format string, args ...any)) Option {
 	return func(s *Server) { s.logf = logf }
 }
 
-func WithRedactConfig(cfg *condition.PIIRedactionConfig) Option {
+func WithRedactConfig(cfg *rules.PIIRedactionConfig) Option {
 	return func(s *Server) { s.redactConfig = cfg }
 }
 
@@ -87,7 +87,7 @@ func WithTrustedProxies(cidrs []string) Option {
 	}
 }
 
-func New(service *condition.Service, opts ...Option) *Server {
+func New(service *rules.Service, opts ...Option) *Server {
 	cfg := service.Config()
 	s := &Server{service: service, maxBody: cfg.MaxRequestBytes, timeout: cfg.RequestTimeout, metrics: NewMetrics()}
 	if s.maxBody == 0 {
@@ -197,7 +197,7 @@ func (s *Server) productionReadiness(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) validate(w http.ResponseWriter, r *http.Request) {
-	var req condition.ValidationRequest
+	var req rules.ValidationRequest
 	if !decodeJSON(w, r, s.maxBody, &req) {
 		return
 	}
@@ -214,7 +214,7 @@ func (s *Server) validate(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) publish(w http.ResponseWriter, r *http.Request) {
-	var req condition.PublishRequest
+	var req rules.PublishRequest
 	if !decodeJSON(w, r, s.maxBody, &req) {
 		return
 	}
@@ -236,7 +236,7 @@ func (s *Server) listVersions(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) approve(w http.ResponseWriter, r *http.Request) {
-	var req condition.ApprovalRequest
+	var req rules.ApprovalRequest
 	if r.Body != nil && r.ContentLength != 0 && !decodeJSON(w, r, s.maxBody, &req) {
 		return
 	}
@@ -258,7 +258,7 @@ func (s *Server) activate(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) disable(w http.ResponseWriter, r *http.Request) {
-	var req condition.DisableRequest
+	var req rules.DisableRequest
 	if r.Body != nil && r.ContentLength != 0 && !decodeJSON(w, r, s.maxBody, &req) {
 		return
 	}
@@ -271,7 +271,7 @@ func (s *Server) disable(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) enable(w http.ResponseWriter, r *http.Request) {
-	var req condition.DisableRequest
+	var req rules.DisableRequest
 	if r.Body != nil && r.ContentLength != 0 && !decodeJSON(w, r, s.maxBody, &req) {
 		return
 	}
@@ -318,7 +318,7 @@ func (s *Server) getDefinition(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) evaluate(w http.ResponseWriter, r *http.Request) {
-	var req condition.EvaluateRequest
+	var req rules.EvaluateRequest
 	if !decodeJSON(w, r, s.maxBody, &req) {
 		return
 	}
@@ -331,7 +331,7 @@ func (s *Server) evaluate(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) evaluateChain(w http.ResponseWriter, r *http.Request) {
-	var req condition.ChainEvaluateRequest
+	var req rules.ChainEvaluateRequest
 	if !decodeJSON(w, r, s.maxBody, &req) {
 		return
 	}
@@ -344,7 +344,7 @@ func (s *Server) evaluateChain(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) evaluateLifecycle(w http.ResponseWriter, r *http.Request) {
-	var req condition.LifecycleEvaluateRequest
+	var req rules.LifecycleEvaluateRequest
 	if !decodeJSON(w, r, s.maxBody, &req) {
 		return
 	}
@@ -387,7 +387,7 @@ func (s *Server) gates(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) simulate(w http.ResponseWriter, r *http.Request) {
-	var req condition.SimulationRequest
+	var req rules.SimulationRequest
 	if !decodeJSON(w, r, s.maxBody, &req) {
 		return
 	}
@@ -400,7 +400,7 @@ func (s *Server) simulate(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) compare(w http.ResponseWriter, r *http.Request) {
-	var req condition.SimulationRequest
+	var req rules.SimulationRequest
 	if !decodeJSON(w, r, s.maxBody, &req) {
 		return
 	}
@@ -413,7 +413,7 @@ func (s *Server) compare(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) explainPackage(w http.ResponseWriter, r *http.Request) {
-	var req condition.PackageExplainRequest
+	var req rules.PackageExplainRequest
 	if !decodeJSON(w, r, s.maxBody, &req) {
 		return
 	}
@@ -435,7 +435,7 @@ func (s *Server) routeCoverage(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) canary(w http.ResponseWriter, r *http.Request) {
-	var req condition.CanaryRequest
+	var req rules.CanaryRequest
 	if !decodeJSON(w, r, s.maxBody, &req) {
 		return
 	}
@@ -448,7 +448,7 @@ func (s *Server) canary(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) startWorkflow(w http.ResponseWriter, r *http.Request) {
-	var req condition.WorkflowRequest
+	var req rules.WorkflowRequest
 	if !decodeJSON(w, r, s.maxBody, &req) {
 		return
 	}
@@ -461,7 +461,7 @@ func (s *Server) startWorkflow(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) advanceWorkflow(w http.ResponseWriter, r *http.Request) {
-	var req condition.WorkflowRequest
+	var req rules.WorkflowRequest
 	if !decodeJSON(w, r, s.maxBody, &req) {
 		return
 	}
@@ -582,7 +582,7 @@ func (s *Server) metricsEndpoint(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) reload(w http.ResponseWriter, r *http.Request) {
-	var req condition.ReloadRequest
+	var req rules.ReloadRequest
 	if !decodeJSON(w, r, s.maxBody, &req) {
 		return
 	}
@@ -595,7 +595,7 @@ func (s *Server) reload(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) blastRadius(w http.ResponseWriter, r *http.Request) {
-	var req condition.SimulationRequest
+	var req rules.SimulationRequest
 	if !decodeJSON(w, r, s.maxBody, &req) {
 		return
 	}
@@ -682,7 +682,7 @@ func (s *Server) observe(next http.Handler) http.Handler {
 		s.metrics.Begin()
 		defer func() {
 			duration := time.Since(start)
-			s.metrics.End(firstNonEmpty(r.Header.Get("X-Tenant-ID"), condition.TenantFromContext(r.Context())), r.Method, r.URL.Path, rr.status, duration)
+			s.metrics.End(firstNonEmpty(r.Header.Get("X-Tenant-ID"), rules.TenantFromContext(r.Context())), r.Method, r.URL.Path, rr.status, duration)
 			s.metrics.ObserveRouteLatency(float64(duration.Milliseconds()))
 			if s.logf != nil {
 				s.logf("%s %s status=%d duration=%s", r.Method, r.URL.Path, rr.status, duration)
@@ -698,30 +698,30 @@ func (s *Server) withSubject(next http.Handler) http.Handler {
 		if subject == "" {
 			subject = "anonymous"
 		}
-		ctx := condition.ContextWithSubject(r.Context(), subject)
+		ctx := rules.ContextWithSubject(r.Context(), subject)
 		if tenantID := r.Header.Get("X-Tenant-ID"); tenantID != "" {
-			ctx = condition.ContextWithTenant(ctx, tenantID)
-			ctx = condition.WithContextValue(ctx, "tenant.id", tenantID)
+			ctx = rules.ContextWithTenant(ctx, tenantID)
+			ctx = rules.WithContextValue(ctx, "tenant.id", tenantID)
 		}
 		if requestID := firstHeader(r, "X-Request-ID", "X-Correlation-ID"); requestID != "" {
-			ctx = condition.WithRequestValue(ctx, "id", requestID)
+			ctx = rules.WithRequestValue(ctx, "id", requestID)
 		}
-		ctx = condition.WithRequestValue(ctx, "method", r.Method)
-		ctx = condition.WithRequestValue(ctx, "path", r.URL.Path)
-		ctx = condition.WithRequestValue(ctx, "remote_ip", s.remoteIP(r))
-		ctx = condition.WithRequestValue(ctx, "headers", requestHeaders(r.Header))
+		ctx = rules.WithRequestValue(ctx, "method", r.Method)
+		ctx = rules.WithRequestValue(ctx, "path", r.URL.Path)
+		ctx = rules.WithRequestValue(ctx, "remote_ip", s.remoteIP(r))
+		ctx = rules.WithRequestValue(ctx, "headers", requestHeaders(r.Header))
 		if match := s.matchRoute(r.Method, r.URL.Path); match.Matched {
-			ctx = condition.WithRequestValue(ctx, "route_template", match.NormalizedPattern)
-			ctx = condition.WithRequestValue(ctx, "route_pattern", match.FiberPattern)
-			ctx = condition.WithRequestValue(ctx, "route_id", match.ID)
-			ctx = condition.WithRequestValue(ctx, "route_metadata", match.Metadata)
-			ctx = condition.WithRequestValue(ctx, "params", match.Params)
+			ctx = rules.WithRequestValue(ctx, "route_template", match.NormalizedPattern)
+			ctx = rules.WithRequestValue(ctx, "route_pattern", match.FiberPattern)
+			ctx = rules.WithRequestValue(ctx, "route_id", match.ID)
+			ctx = rules.WithRequestValue(ctx, "route_metadata", match.Metadata)
+			ctx = rules.WithRequestValue(ctx, "params", match.Params)
 		}
 		if sessionID := r.Header.Get("X-Session-ID"); sessionID != "" {
-			ctx = condition.WithSessionValue(ctx, "id", sessionID)
+			ctx = rules.WithSessionValue(ctx, "id", sessionID)
 		}
 		if mfa := r.Header.Get("X-Session-MFA"); mfa != "" {
-			ctx = condition.WithSessionValue(ctx, "attrs.mfa", parseHeaderBool(mfa))
+			ctx = rules.WithSessionValue(ctx, "attrs.mfa", parseHeaderBool(mfa))
 		}
 		next.ServeHTTP(w, r.WithContext(ctx))
 	})

@@ -11,7 +11,7 @@ import (
 
 	"examples/internal/examplebase"
 
-	"github.com/oarkflow/rules/pkg/condition"
+	"github.com/oarkflow/rules"
 	"github.com/oarkflow/rules/pkg/storage"
 )
 
@@ -67,15 +67,15 @@ type TriagePlan struct {
 
 func main() {
 	ctx := context.Background()
-	svc := condition.NewService(storage.NewMemoryStore(), condition.Config{Environment: "example", RequireTests: true})
-	if _, err := svc.Publish(ctx, condition.PublishRequest{Name: "support-routing", Version: "1", Source: policySource, RunTests: true, BaseDir: examplebase.Dir()}); err != nil {
+	svc := rules.NewService(storage.NewMemoryStore(), rules.Config{Environment: "example", RequireTests: true})
+	if _, err := svc.Publish(ctx, rules.PublishRequest{Name: "support-routing", Version: "1", Source: policySource, RunTests: true, BaseDir: examplebase.Dir()}); err != nil {
 		log.Fatal(err)
 	}
 
 	now := time.Date(2026, 5, 24, 10, 30, 0, 0, time.UTC)
 	for _, c := range intakeQueue(now) {
 		plan := triage(c, now)
-		resp, err := svc.Evaluate(ctx, "support-routing", condition.EvaluateRequest{Decision: "support_routing", Input: plan.Facts})
+		resp, err := svc.Evaluate(ctx, "support-routing", rules.EvaluateRequest{Decision: "support_routing", Input: plan.Facts})
 		if err != nil {
 			log.Fatal(err)
 		}

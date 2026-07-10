@@ -1,5 +1,5 @@
 address ":8443"
-authz_path "./examples/production-server/condition.authz"
+authz_path "./examples/production-server/rules.authz"
 
 # Only these immediate peers may set X-Forwarded-For or X-Real-IP.
 trusted_proxies ["10.0.0.0/24", "127.0.0.1"]
