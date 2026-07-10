@@ -14,8 +14,8 @@ import (
 	"time"
 
 	"github.com/oarkflow/authz"
-	authzmw "github.com/oarkflow/authz/middleware"
-	authzstores "github.com/oarkflow/authz/stores"
+	authzmw "github.com/oarkflow/authz/pkg/middleware"
+	authzstores "github.com/oarkflow/authz/pkg/stores"
 	"github.com/oarkflow/rules/pkg/condition"
 	"github.com/oarkflow/rules/pkg/routing"
 	"github.com/oarkflow/rules/pkg/storage"

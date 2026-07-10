@@ -12,7 +12,7 @@ import (
 	"time"
 
 	"github.com/oarkflow/authz"
-	authzstores "github.com/oarkflow/authz/stores"
+	authzstores "github.com/oarkflow/authz/pkg/stores"
 	"github.com/oarkflow/rules/pkg/condition"
 	"github.com/oarkflow/rules/pkg/storage"
 )

@@ -5,7 +5,7 @@ import (
 	"os"
 
 	"github.com/oarkflow/authz"
-	authzstores "github.com/oarkflow/authz/stores"
+	authzstores "github.com/oarkflow/authz/pkg/stores"
 )
 
 func AuthzEngineFromFile(path string) (*authz.Engine, error) {
