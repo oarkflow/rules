@@ -19,8 +19,8 @@ http {
 }
 
 store {
-  kind "sqlite"
-  path "./.condition/production-server.db"
+  kind "file"
+  path "./.condition/production-server"
 }
 
 service {

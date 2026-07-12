@@ -30,7 +30,7 @@ Metrics are available to `condition-admin` and `condition-auditor` roles:
 curl -H 'X-Roles: condition-auditor' http://localhost:8080/v1/metrics
 ```
 
-The default CLI store is file-backed at `.condition`; SQLite is available with `--store sqlite --store-path rules.db`.
+The CLI supports memory and file-backed storage, defaulting to `.condition`. SQLite and PostgreSQL adapters live in the independently versioned `github.com/oarkflow/rules/contrib/storage` module for applications that construct a `rules.Service` directly.
 
 The HTTP server honors the service `Config` request timeout and max body size. Optional in-memory rate limiting can be enabled from Go with `server.WithRateLimit(limit, window)` or in `rules.yaml`. The CLI server also sets HTTP read/header/write/idle timeouts, supports graceful shutdown, and can serve TLS with `--tls-cert` and `--tls-key`.
 
@@ -77,8 +77,8 @@ http {
 }
 
 store {
-  kind "sqlite"
-  path "/var/lib/condition/rules.db"
+  kind "file"
+  path "/var/lib/condition"
 }
 
 service {
@@ -107,7 +107,7 @@ rate_limit {
 }
 ```
 
-Audit writes are fail-closed: if the audit sink cannot read the previous hash or append the new sealed record, publish/evaluate/lifecycle operations return an error instead of continuing silently. Definitions, active versions, audits, reports, and workflows are tenant-partitioned; HTTP requests use `X-Tenant-ID`. Runtime policy is deny-by-default for external datasets, and file/HTTP access must be explicitly allowed. SQLite stores enable foreign keys, busy timeout, WAL mode for file databases, and bounded connection pools. `X-Forwarded-For` and `X-Real-IP` are ignored unless the immediate peer is listed in `trusted_proxies`.
+Audit writes are fail-closed: if the audit sink cannot read the previous hash or append the new sealed record, publish/evaluate/lifecycle operations return an error instead of continuing silently. Definitions, active versions, audits, reports, and workflows are tenant-partitioned; HTTP requests use `X-Tenant-ID`. Runtime policy is deny-by-default for external datasets, and file/HTTP access must be explicitly allowed. The contrib SQLite store enables foreign keys, busy timeout, WAL mode for file databases, and bounded connection pools. `X-Forwarded-For` and `X-Real-IP` are ignored unless the immediate peer is listed in `trusted_proxies`.
 
 A complete runnable BCL server config is in `examples/production-server`.
 

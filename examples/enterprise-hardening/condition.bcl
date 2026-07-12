@@ -3,8 +3,8 @@ authz_path "./rules.authz"
 trusted_proxies ["127.0.0.1"]
 
 store {
-  kind "sqlite"
-  path "./.condition/enterprise-hardening.db"
+  kind "file"
+  path "./.condition/enterprise-hardening"
 }
 
 service {

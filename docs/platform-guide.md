@@ -489,7 +489,7 @@ Effect:
 
 ## Storage, Retention, And Readiness
 
-Condition supports memory, file, SQLite, and shared storage conformance behavior for policy state.
+Condition core supports memory and file storage. The separately versioned contrib module supplies SQLite and PostgreSQL implementations of the same storage contract.
 
 State compaction request:
 

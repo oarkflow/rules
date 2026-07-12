@@ -9,14 +9,16 @@ import (
 	"time"
 
 	"github.com/oarkflow/rules/pkg/audit"
+	"github.com/oarkflow/squealx"
+	"github.com/oarkflow/squealx/drivers/postgres"
 )
 
 type PostgresStore struct {
-	db *sql.DB
+	db *squealx.DB
 }
 
 func NewPostgresStore(connString string) (*PostgresStore, error) {
-	db, err := sql.Open("pgx", connString)
+	db, err := postgres.Open(connString, "rules-storage")
 	if err != nil {
 		return nil, err
 	}
@@ -776,7 +778,9 @@ func (s *PostgresStore) Compact(ctx context.Context, req RetentionRequest) (Rete
 	return result, nil
 }
 
-func pgDelete(db *sql.DB, ctx context.Context, table, where string, args ...any) (int, error) {
+func pgDelete(db interface {
+	ExecContext(context.Context, string, ...any) (sql.Result, error)
+}, ctx context.Context, table, where string, args ...any) (int, error) {
 	res, err := db.ExecContext(ctx, "DELETE FROM "+table+" WHERE "+where, args...)
 	if err != nil {
 		return 0, err

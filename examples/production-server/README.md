@@ -4,7 +4,7 @@ This example uses BCL for Condition runtime configuration and the authz DSL for 
 
 ## Files
 
-- `rules.bcl`: hardened HTTPS server config with SQLite, strict validation/evaluation, approval gates, rate limits, trusted proxy CIDRs, and TLS file paths.
+- `rules.bcl`: hardened HTTPS server config with file storage, strict validation/evaluation, approval gates, rate limits, trusted proxy CIDRs, and TLS file paths.
 - `rules.local.bcl`: local HTTP variant with the same production safety switches, useful when TLS is terminated by a local proxy or gateway.
 - `rules.authz`: route-scoped roles for admins, publishers, operators, simulators, and auditors.
 

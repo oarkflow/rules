@@ -353,14 +353,6 @@ func TestServiceLifecycleControlsPersistAcrossStores(t *testing.T) {
 		}
 		assertLifecycleControlsPersist(t, store)
 	})
-	t.Run("sqlite", func(t *testing.T) {
-		store, err := storage.NewSQLiteStore(":memory:")
-		if err != nil {
-			t.Fatal(err)
-		}
-		defer store.Close()
-		assertLifecycleControlsPersist(t, store)
-	})
 }
 
 func assertLifecycleControlsPersist(t *testing.T, store storage.Store) {
@@ -2546,7 +2538,7 @@ func TestServiceStatefulScenarioWithClock(t *testing.T) {
 	now := time.Date(2026, 6, 1, 0, 0, 0, 0, time.UTC)
 	svc := NewService(storage.NewMemoryStore(), Config{
 		RequireActivationApproval: true,
-		Clock:                    func() time.Time { return now },
+		Clock:                     func() time.Time { return now },
 	})
 
 	// Step 1: Publish — version should be activation_pending and not auto-activated

@@ -13,8 +13,8 @@ http {
 }
 
 store {
-  kind "sqlite"
-  path "./.condition/local-production-server.db"
+  kind "file"
+  path "./.condition/local-production-server"
 }
 
 service {

@@ -73,8 +73,8 @@ func runServe(args []string) error {
 	fs := flag.NewFlagSet("serve", flag.ExitOnError)
 	configPath := fs.String("config", "", "condition config path")
 	addr := fs.String("addr", ":8080", "listen address")
-	storeKind := fs.String("store", "file", "store kind: file, sqlite, memory")
-	storePath := fs.String("store-path", ".condition", "file root or sqlite path")
+	storeKind := fs.String("store", "file", "store kind: file, memory")
+	storePath := fs.String("store-path", ".condition", "file root")
 	authzPath := fs.String("authz", "", "authz DSL config path")
 	tlsCert := fs.String("tls-cert", "", "TLS certificate path")
 	tlsKey := fs.String("tls-key", "", "TLS private key path")
@@ -593,12 +593,6 @@ func newServiceFromConfig(cfg RuntimeConfig) (*rules.Service, func(), error) {
 	switch strings.ToLower(kind) {
 	case "memory":
 		return rules.NewService(storage.NewMemoryStore(), serviceConfig(cfg)), func() {}, nil
-	case "sqlite":
-		store, err := storage.NewSQLiteStore(path)
-		if err != nil {
-			return nil, nil, err
-		}
-		return rules.NewService(store, serviceConfig(cfg)), func() { _ = store.Close() }, nil
 	case "file", "":
 		store, err := storage.NewFileStore(path)
 		if err != nil {

@@ -11,11 +11,12 @@ import (
 	"time"
 
 	"github.com/oarkflow/rules/pkg/audit"
-	_ "modernc.org/sqlite"
+	"github.com/oarkflow/squealx"
+	"github.com/oarkflow/squealx/drivers/sqlite"
 )
 
 type SQLiteStore struct {
-	db *sql.DB
+	db *squealx.DB
 }
 
 func NewSQLiteStore(path string) (*SQLiteStore, error) {
@@ -26,7 +27,7 @@ func NewSQLiteStore(path string) (*SQLiteStore, error) {
 			}
 		}
 	}
-	db, err := sql.Open("sqlite", path)
+	db, err := sqlite.Open(path, "rules-storage")
 	if err != nil {
 		return nil, err
 	}
@@ -1038,7 +1039,9 @@ func (s *SQLiteStore) Compact(ctx context.Context, req RetentionRequest) (Retent
 	return result, nil
 }
 
-func sqliteDelete(ctx context.Context, tx *sql.Tx, table string, where []string, args []any) (int, error) {
+func sqliteDelete(ctx context.Context, tx interface {
+	ExecContext(context.Context, string, ...any) (sql.Result, error)
+}, table string, where []string, args []any) (int, error) {
 	res, err := tx.ExecContext(ctx, "DELETE FROM "+table+" WHERE "+strings.Join(where, " AND "), args...)
 	if err != nil {
 		return 0, err
