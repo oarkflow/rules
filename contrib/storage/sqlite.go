@@ -2,21 +2,26 @@ package storage
 
 import (
 	"context"
+	"crypto/sha256"
 	"database/sql"
 	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/oarkflow/rules/pkg/audit"
 	"github.com/oarkflow/squealx"
 	"github.com/oarkflow/squealx/drivers/sqlite"
+	"golang.org/x/sys/unix"
 )
 
 type SQLiteStore struct {
-	db *squealx.DB
+	db          *squealx.DB
+	path        string
+	entityLocks sync.Map
 }
 
 func NewSQLiteStore(path string) (*SQLiteStore, error) {
@@ -34,7 +39,7 @@ func NewSQLiteStore(path string) (*SQLiteStore, error) {
 	db.SetMaxOpenConns(1)
 	db.SetMaxIdleConns(1)
 	db.SetConnMaxLifetime(30 * time.Minute)
-	s := &SQLiteStore{db: db}
+	s := &SQLiteStore{db: db, path: path}
 	if err := s.configure(context.Background(), path); err != nil {
 		_ = db.Close()
 		return nil, err
@@ -44,6 +49,40 @@ func NewSQLiteStore(path string) (*SQLiteStore, error) {
 		return nil, err
 	}
 	return s, nil
+}
+
+func (s *SQLiteStore) LockEntity(ctx context.Context, key string) (func() error, error) {
+	value, _ := s.entityLocks.LoadOrStore(key, &sync.Mutex{})
+	local := value.(*sync.Mutex)
+	local.Lock()
+	if s.path == "" || s.path == ":memory:" || strings.HasPrefix(s.path, "file::memory:") {
+		return func() error { local.Unlock(); return nil }, nil
+	}
+	digest := sha256.Sum256([]byte(key))
+	dir := s.path + ".locks"
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		local.Unlock()
+		return nil, err
+	}
+	file, err := os.OpenFile(filepath.Join(dir, fmt.Sprintf("%x.lock", digest)), os.O_CREATE|os.O_RDWR, 0o600)
+	if err != nil {
+		local.Unlock()
+		return nil, err
+	}
+	if err := unix.Flock(int(file.Fd()), unix.LOCK_EX); err != nil {
+		_ = file.Close()
+		local.Unlock()
+		return nil, err
+	}
+	return func() error {
+		unlockErr := unix.Flock(int(file.Fd()), unix.LOCK_UN)
+		closeErr := file.Close()
+		local.Unlock()
+		if unlockErr != nil {
+			return unlockErr
+		}
+		return closeErr
+	}, nil
 }
 
 func (s *SQLiteStore) Close() error {

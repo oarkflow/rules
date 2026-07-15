@@ -753,7 +753,7 @@ func TestServiceWorkflowStartAdvance(t *testing.T) {
     stage "intake" {
       queue "risk-intake"
       sla "15m"
-      rule "to_senior" { next_stage "senior" }
+      rule "to_senior" { when { case.open == true } next_stage "senior" }
     }
     stage "senior" {
       role "risk-manager"
@@ -785,6 +785,72 @@ func TestServiceWorkflowStartAdvance(t *testing.T) {
 	}
 	if stored.Stage != "senior" {
 		t.Fatalf("stored = %#v", stored)
+	}
+}
+
+func TestServiceDeeplyNestedConditionalWorkflow(t *testing.T) {
+	ctx := context.Background()
+	source := `module "nested-workflow" {
+  decision_table "required" { default allow row "allow" { when { true == true } then { decision allow } } }
+  workflow "review" {
+    start "intake"
+    stage "intake" {
+      rule "critical" {
+        priority 100
+        when { all { case.risk == "high" any { case.geo.region == "restricted" case.score >= 90 } not { case.flags.suppressed == true } } }
+        next_stage "senior"
+      }
+      rule "generic_high" {
+        priority 10
+        when { case.risk == "high" }
+        next_stage "manual"
+      }
+      rule "fallback" {
+        default true
+        next_stage "complete"
+      }
+    }
+    stage "senior" { role "director" }
+    stage "manual" { role "analyst" }
+    stage "complete" { role "system" }
+  }
+}`
+	svc := NewService(storage.NewMemoryStore(), Config{})
+	if _, err := svc.Publish(ctx, PublishRequest{Name: "nested-workflow", Source: source}); err != nil {
+		t.Fatal(err)
+	}
+	nested, err := svc.StartWorkflow(ctx, "nested-workflow", "review", map[string]any{"case": map[string]any{"risk": "high", "geo": map[string]any{"region": "restricted"}, "score": 20, "flags": map[string]any{"suppressed": false}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	nested, err = svc.AdvanceWorkflow(ctx, nested.ID, nil)
+	if err != nil || nested.Stage != "senior" {
+		t.Fatalf("nested stage=%q err=%v", nested.Stage, err)
+	}
+	fallback, err := svc.StartWorkflow(ctx, "nested-workflow", "review", map[string]any{"case": map[string]any{"risk": "low"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	fallback, err = svc.AdvanceWorkflow(ctx, fallback.ID, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fallback.Stage != "complete" {
+		t.Fatalf("fallback stage=%q err=%v", fallback.Stage, err)
+	}
+}
+
+func TestWorkflowTargetValidatedAtPublish(t *testing.T) {
+	source := `module "invalid-workflow" {
+  decision_table "required" { default allow row "allow" { when { true == true } then { decision allow } } }
+  workflow "review" { start "intake" stage "intake" { rule "broken" { next_stage "missing" } } }
+}`
+	report, err := NewService(storage.NewMemoryStore(), Config{}).Validate(context.Background(), ValidationRequest{Name: "invalid-workflow", Source: source})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if report.Valid || !diagnosticsContain(report.Diagnostics, `unknown stage "missing"`) {
+		t.Fatalf("report = %#v", report)
 	}
 }
 
@@ -2079,6 +2145,7 @@ func TestServiceWebhookSinkRequiresRuntimeAllowlist(t *testing.T) {
 
 func TestServiceActionRetryMetadata(t *testing.T) {
 	ctx := context.Background()
+	deliveryAttempts := 0
 	source := `module "retry-actions" {
   action_catalog "default" {
     action "notify" { sink "webhook" severity "high" retries 2 }
@@ -2107,6 +2174,10 @@ func TestServiceActionRetryMetadata(t *testing.T) {
 		}},
 		ActionHandlers: map[string]ActionHandler{
 			"notify": func(context.Context, LifecycleAction) (ActionResult, error) {
+				deliveryAttempts++
+				if deliveryAttempts > 1 {
+					return ActionResult{Handled: true, Status: "delivered"}, nil
+				}
 				return ActionResult{}, errors.New("provider unavailable")
 			},
 		},
@@ -2125,7 +2196,15 @@ func TestServiceActionRetryMetadata(t *testing.T) {
 	if len(deliveries) != 1 || deliveries[0].Status != "retry_scheduled" || deliveries[0].MaxAttempts != 3 || deliveries[0].NextAttempt == nil {
 		t.Fatalf("delivery = %#v", deliveries)
 	}
-	deadLetterSvc := NewService(storage.NewMemoryStore(), Config{Runtime: svc.Config().Runtime, ActionHandlers: svc.Config().ActionHandlers})
+	retry, err := svc.RetryActions(ctx, ActionRetryRequest{Now: deliveries[0].NextAttempt.Add(time.Second)})
+	if err != nil || retry.Delivered != 1 {
+		t.Fatalf("retry = %#v err=%v", retry, err)
+	}
+	deadLetterSvc := NewService(storage.NewMemoryStore(), Config{Runtime: svc.Config().Runtime, ActionHandlers: map[string]ActionHandler{
+		"notify": func(context.Context, LifecycleAction) (ActionResult, error) {
+			return ActionResult{}, errors.New("provider unavailable")
+		},
+	}})
 	deadLetterSource := strings.Replace(source, `retries 2`, `retries 0`, 1)
 	if resp, err := deadLetterSvc.Publish(ctx, PublishRequest{Name: "dead-letter-actions", Source: deadLetterSource}); err != nil {
 		t.Fatalf("%v: %#v", err, resp)

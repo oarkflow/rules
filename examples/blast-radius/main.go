@@ -32,7 +32,8 @@ func main() {
 		log.Fatal(err)
 	}
 
-	fmt.Println("=== Blast Radius: Policy Change Impact Analysis ===\n")
+	fmt.Println("=== Blast Radius: Policy Change Impact Analysis ===")
+	fmt.Println()
 
 	fmt.Println("--- Version 1 (base) evaluation ---")
 	evalDemo(ctx, svc)

@@ -50,6 +50,8 @@ go run ./examples/autonomous-remediation
 
 Production server configuration examples live in `production-server`. They are not Go use-case runners; they show BCL-native runtime config for file storage, strict validation/evaluation, fail-closed audit behavior, HTTP timeouts, trusted proxies, TLS, rate limits, and route-scoped authz.
 
+`production-features` is the end-to-end reference for signed publishing and tamper rejection, lifecycle and chain idempotency, durable retry/dead-letter handling, cross-worker locks, quotas, approval governance, incident acknowledgement/resolution, typed semantic IR, mutation testing, readiness and latency metrics, deeply nested conditional workflows, SLA timeout ticking, stateful time-travel scenarios, route coverage, and OpenAPI route import/export. Its `FEATURES.md` maps every added feature to executable code or DSL.
+
 ## Use Case Coverage
 
 * `access-control`: RBAC/ABAC, session risk, conditional MFA, and break-glass access.

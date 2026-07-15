@@ -13,7 +13,7 @@ This example uses BCL for Condition runtime configuration and the authz DSL for 
 From the `condition` module:
 
 ```sh
-go run ./cmd/condition serve --config ./examples/production-server/rules.local.bcl
+go run ./cmd/rules serve --config ./examples/production-server/rules.local.bcl
 ```
 
 Check readiness:
@@ -25,7 +25,7 @@ curl -H 'X-Roles: condition-auditor' http://localhost:8080/v1/readiness
 Publish a strict, tested definition:
 
 ```sh
-go run ./cmd/condition publish \
+go run ./cmd/rules publish \
   --config ./examples/production-server/rules.local.bcl \
   --name payment-risk \
   --version 1 \
@@ -60,7 +60,7 @@ curl -H 'X-Roles: condition-operator' \
 Verify the audit chain:
 
 ```sh
-go run ./cmd/condition audit verify --config ./examples/production-server/rules.local.bcl
+go run ./cmd/rules audit verify --config ./examples/production-server/rules.local.bcl
 ```
 
 ## HTTPS Variant
@@ -68,7 +68,7 @@ go run ./cmd/condition audit verify --config ./examples/production-server/rules.
 `rules.bcl` expects certificate files at `./examples/production-server/tls/dev.crt` and `./examples/production-server/tls/dev.key`. Generate development-only certificates however your environment normally does, then run:
 
 ```sh
-go run ./cmd/condition serve --config ./examples/production-server/rules.bcl
+go run ./cmd/rules serve --config ./examples/production-server/rules.bcl
 ```
 
 In a real deployment, keep TLS keys outside the repository, point `tls.cert_file` and `tls.key_file` to managed secret mounts, and put only trusted gateway CIDRs in `trusted_proxies`.

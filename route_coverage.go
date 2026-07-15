@@ -4,8 +4,10 @@ import (
 	"context"
 	"fmt"
 	"sort"
+	"strings"
 	"time"
 
+	"github.com/oarkflow/bcl"
 	"github.com/oarkflow/rules/pkg/storage"
 )
 
@@ -35,12 +37,21 @@ func (s *Service) RouteCoverage(ctx context.Context, definition string) (*RouteC
 			if len(phase.Decisions) == 0 && len(phase.Chains) == 0 {
 				continue
 			}
-			coverage[lifecycle.Routes] = append(coverage[lifecycle.Routes], coverageRef{lifecycle: lifecycle.ID, phase: phase.ID})
+			refs, routeSpecific := phaseRouteReferences(record.Program, phase)
+			if !routeSpecific {
+				for _, route := range catalogs[lifecycle.Routes] {
+					coverage[lifecycle.Routes+"."+route.ID] = append(coverage[lifecycle.Routes+"."+route.ID], coverageRef{lifecycle: lifecycle.ID, phase: phase.ID})
+				}
+				continue
+			}
+			for routeID := range refs {
+				coverage[lifecycle.Routes+"."+routeID] = append(coverage[lifecycle.Routes+"."+routeID], coverageRef{lifecycle: lifecycle.ID, phase: phase.ID})
+			}
 		}
 	}
 	for catalogID, routes := range catalogs {
 		for _, route := range routes {
-			refs := coverage[catalogID]
+			refs := coverage[catalogID+"."+route.ID]
 			item := RouteCoverageItem{Catalog: catalogID, RouteID: route.ID, Method: route.Method, Pattern: route.Pattern, Covered: len(refs) > 0}
 			seenLifecycle := map[string]bool{}
 			seenPhase := map[string]bool{}
@@ -80,4 +91,38 @@ func (s *Service) RouteCoverage(ctx context.Context, definition string) (*RouteC
 		return nil, err
 	}
 	return &report, nil
+}
+
+func phaseRouteReferences(program *bcl.DecisionProgram, phase LifecyclePhaseDefinition) (map[string]bool, bool) {
+	refs := map[string]bool{}
+	routeSpecific := false
+	inspectDecision := func(id string) {
+		decision := program.Decisions[id]
+		if decision == nil {
+			return
+		}
+		for _, rule := range decision.Rules {
+			raw := expressionText(rule.Condition)
+			if !strings.Contains(raw, "route.id") {
+				continue
+			}
+			routeSpecific = true
+			for _, token := range strings.FieldsFunc(raw, func(r rune) bool {
+				return !(r == '_' || r == '-' || r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9')
+			}) {
+				refs[token] = true
+			}
+		}
+	}
+	for _, decision := range phase.Decisions {
+		inspectDecision(decision)
+	}
+	for _, chainID := range phase.Chains {
+		if chain, err := chainDefinition(program, chainID); err == nil {
+			for _, decision := range chain.Decisions {
+				inspectDecision(decision)
+			}
+		}
+	}
+	return refs, routeSpecific
 }

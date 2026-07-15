@@ -3,6 +3,7 @@ package storage
 import (
 	"bufio"
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -14,11 +15,44 @@ import (
 	"time"
 
 	"github.com/oarkflow/rules/pkg/audit"
+	"golang.org/x/sys/unix"
 )
 
 type FileStore struct {
-	root string
-	mu   sync.Mutex
+	root        string
+	mu          sync.Mutex
+	entityLocks sync.Map
+}
+
+func (s *FileStore) LockEntity(ctx context.Context, key string) (func() error, error) {
+	value, _ := s.entityLocks.LoadOrStore(key, &sync.Mutex{})
+	local := value.(*sync.Mutex)
+	local.Lock()
+	digest := sha256.Sum256([]byte(key))
+	dir := filepath.Join(s.root, ".locks")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		local.Unlock()
+		return nil, err
+	}
+	file, err := os.OpenFile(filepath.Join(dir, fmt.Sprintf("%x.lock", digest)), os.O_CREATE|os.O_RDWR, 0o600)
+	if err != nil {
+		local.Unlock()
+		return nil, err
+	}
+	if err := unix.Flock(int(file.Fd()), unix.LOCK_EX); err != nil {
+		_ = file.Close()
+		local.Unlock()
+		return nil, err
+	}
+	return func() error {
+		unlockErr := unix.Flock(int(file.Fd()), unix.LOCK_UN)
+		closeErr := file.Close()
+		local.Unlock()
+		if unlockErr != nil {
+			return unlockErr
+		}
+		return closeErr
+	}, nil
 }
 
 func NewFileStore(root string) (*FileStore, error) {

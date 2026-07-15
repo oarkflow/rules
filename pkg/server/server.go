@@ -97,9 +97,11 @@ func New(service *rules.Service, opts ...Option) *Server {
 		s.timeout = 5 * time.Second
 	}
 
-	cfg.OnDecision = func(ms float64) { s.metrics.ObserveDecisionLatency(ms) }
-	cfg.OnChain = func(ms float64) { s.metrics.ObserveChainLatency(ms) }
-	cfg.OnAction = func(ms float64) { s.metrics.ObserveActionLatency(ms) }
+	service.SetObservers(
+		func(ms float64) { s.metrics.ObserveDecisionLatency(ms) },
+		func(ms float64) { s.metrics.ObserveChainLatency(ms) },
+		func(ms float64) { s.metrics.ObserveActionLatency(ms) },
+	)
 
 	for _, opt := range opts {
 		opt(s)
@@ -155,9 +157,9 @@ func defaultRoles() []*authz.Role {
 	return []*authz.Role{
 		{ID: "condition-admin", Name: "Condition Admin", Permissions: perms([]string{"GET", "POST", "PUT", "DELETE"}, "route:*")},
 		{ID: "condition-publisher", Name: "Condition Publisher", Permissions: perms([]string{"GET", "POST"}, "route:POST:/v1/definitions", "route:POST:/v1/definitions/validate", "route:GET:/v1/definitions/:name/versions", "route:POST:/v1/definitions/:name/versions/:version/approve", "route:POST:/v1/definitions/:name/versions/:version/activate", "route:POST:/v1/definitions/:name/disable", "route:POST:/v1/definitions/:name/enable", "route:POST:/v1/definitions/:name/rollback", "route:POST:/v1/reload")},
-		{ID: "condition-operator", Name: "Condition Operator", Permissions: perms([]string{"GET", "POST"}, "route:GET:/v1/definitions", "route:GET:/v1/definitions/:name", "route:POST:/v1/definitions/:name/evaluate", "route:POST:/v1/definitions/:name/chains/:chain/evaluate", "route:POST:/v1/definitions/:name/lifecycles/:lifecycle/evaluate", "route:POST:/v1/definitions/:name/tests", "route:POST:/v1/definitions/:name/gates", "route:POST:/v1/definitions/:name/workflows/:workflow/start", "route:POST:/v1/workflows/:id/advance", "route:GET:/v1/workflows", "route:GET:/v1/workflows/:id")},
-		{ID: "condition-simulator", Name: "Condition Simulator", Permissions: perms([]string{"POST"}, "route:POST:/v1/definitions/:name/simulate", "route:POST:/v1/definitions/:name/compare", "route:POST:/v1/definitions/:name/explain", "route:POST:/v1/definitions/:name/canary")},
-		{ID: "condition-auditor", Name: "Condition Auditor", Permissions: perms([]string{"GET", "POST"}, "route:GET:/v1/readiness", "route:GET:/v1/audits", "route:GET:/v1/audits/:id", "route:POST:/v1/audits/verify", "route:GET:/v1/actions", "route:GET:/v1/incidents", "route:GET:/v1/reports", "route:GET:/v1/metrics")},
+		{ID: "condition-operator", Name: "Condition Operator", Permissions: perms([]string{"GET", "POST"}, "route:GET:/v1/definitions", "route:GET:/v1/definitions/:name", "route:POST:/v1/definitions/:name/evaluate", "route:POST:/v1/definitions/:name/chains/:chain/evaluate", "route:POST:/v1/definitions/:name/lifecycles/:lifecycle/evaluate", "route:POST:/v1/definitions/:name/tests", "route:POST:/v1/definitions/:name/gates", "route:POST:/v1/definitions/:name/workflows/:workflow/start", "route:POST:/v1/workflows/:id/advance", "route:POST:/v1/workflows/tick", "route:POST:/v1/actions/retry", "route:GET:/v1/workflows", "route:GET:/v1/workflows/:id")},
+		{ID: "condition-simulator", Name: "Condition Simulator", Permissions: perms([]string{"POST"}, "route:POST:/v1/definitions/:name/simulate", "route:POST:/v1/definitions/:name/compare", "route:POST:/v1/definitions/:name/explain", "route:POST:/v1/definitions/:name/canary", "route:POST:/v1/definitions/:name/mutation-test")},
+		{ID: "condition-auditor", Name: "Condition Auditor", Permissions: perms([]string{"GET", "POST", "PUT"}, "route:GET:/v1/readiness", "route:GET:/v1/audits", "route:GET:/v1/audits/:id", "route:POST:/v1/audits/verify", "route:GET:/v1/actions", "route:GET:/v1/incidents", "route:PUT:/v1/incidents/:id", "route:GET:/v1/reports", "route:GET:/v1/metrics", "route:GET:/v1/metrics/histograms", "route:GET:/v1/definitions/:name/ir")},
 	}
 }
 
@@ -652,7 +654,64 @@ func (s *Server) resolveApproval(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) latencyHistograms(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, http.StatusOK, s.metrics.Snapshot())
+	writeJSON(w, http.StatusOK, map[string]any{"http": s.metrics.Snapshot(), "service": s.service.GetLatencyHistograms(r.Context())})
+}
+
+func (s *Server) retryActions(w http.ResponseWriter, r *http.Request) {
+	var req rules.ActionRetryRequest
+	if !decodeJSON(w, r, s.maxBody, &req) {
+		return
+	}
+	result, err := s.service.RetryActions(r.Context(), req)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "action_retry_failed", err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, result)
+}
+
+func (s *Server) tickWorkflows(w http.ResponseWriter, r *http.Request) {
+	var req rules.WorkflowTickRequest
+	if !decodeJSON(w, r, s.maxBody, &req) {
+		return
+	}
+	result, err := s.service.TickWorkflows(r.Context(), req)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "workflow_tick_failed", err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, result)
+}
+
+func (s *Server) policyIR(w http.ResponseWriter, r *http.Request) {
+	result, err := s.service.PolicyIR(r.Context(), r.PathValue("name"))
+	if err != nil {
+		writeError(w, http.StatusNotFound, "policy_ir_failed", err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, result)
+}
+
+func (s *Server) updateIncident(w http.ResponseWriter, r *http.Request) {
+	var req rules.IncidentUpdateRequest
+	if !decodeJSON(w, r, s.maxBody, &req) {
+		return
+	}
+	result, err := s.service.UpdateIncident(r.Context(), r.PathValue("id"), req)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "incident_update_failed", err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, result)
+}
+
+func (s *Server) mutationTest(w http.ResponseWriter, r *http.Request) {
+	result, err := s.service.MutationTest(r.Context(), r.PathValue("name"))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "mutation_test_failed", err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, result)
 }
 
 func (s *Server) rateLimit(next http.Handler) http.Handler {
@@ -816,36 +875,36 @@ type Metrics struct {
 	statusCounts map[int]int64
 	tenantCounts map[string]int64
 
-	decisionLatency    []float64
-	chainLatency       []float64
-	routeLatency       []float64
-	actionLatency      []float64
-	decisionCounter    atomic.Int64
-	chainCounter       atomic.Int64
-	routeCounter       atomic.Int64
-	actionCounter      atomic.Int64
-	latencyMu          sync.Mutex
+	decisionLatency []float64
+	chainLatency    []float64
+	routeLatency    []float64
+	actionLatency   []float64
+	decisionCounter atomic.Int64
+	chainCounter    atomic.Int64
+	routeCounter    atomic.Int64
+	actionCounter   atomic.Int64
+	latencyMu       sync.Mutex
 }
 
 type MetricsSnapshot struct {
-	StartedAt          time.Time                   `json:"started_at"`
-	UptimeSeconds      int64                       `json:"uptime_seconds"`
-	RequestsTotal      int64                       `json:"requests_total"`
-	ErrorsTotal        int64                       `json:"errors_total"`
-	RateLimited        int64                       `json:"rate_limited_total"`
-	InFlight           int64                       `json:"in_flight"`
-	AverageLatencyMS   float64                     `json:"average_latency_ms"`
-	Routes             map[string]int64            `json:"routes,omitempty"`
-	Statuses           map[string]int64            `json:"statuses,omitempty"`
-	Tenants            map[string]int64            `json:"tenants,omitempty"`
-	DecisionsTotal     int64                       `json:"decisions_total,omitempty"`
-	ChainsTotal        int64                       `json:"chains_total,omitempty"`
-	RoutesTotal        int64                       `json:"routes_total,omitempty"`
-	ActionsTotal       int64                       `json:"actions_total,omitempty"`
-	DecisionHistogram  []HistogramBucket           `json:"decision_latency_histogram,omitempty"`
-	ChainHistogram     []HistogramBucket           `json:"chain_latency_histogram,omitempty"`
-	RouteHistogram     []HistogramBucket           `json:"route_latency_histogram,omitempty"`
-	ActionHistogram    []HistogramBucket           `json:"action_latency_histogram,omitempty"`
+	StartedAt         time.Time         `json:"started_at"`
+	UptimeSeconds     int64             `json:"uptime_seconds"`
+	RequestsTotal     int64             `json:"requests_total"`
+	ErrorsTotal       int64             `json:"errors_total"`
+	RateLimited       int64             `json:"rate_limited_total"`
+	InFlight          int64             `json:"in_flight"`
+	AverageLatencyMS  float64           `json:"average_latency_ms"`
+	Routes            map[string]int64  `json:"routes,omitempty"`
+	Statuses          map[string]int64  `json:"statuses,omitempty"`
+	Tenants           map[string]int64  `json:"tenants,omitempty"`
+	DecisionsTotal    int64             `json:"decisions_total,omitempty"`
+	ChainsTotal       int64             `json:"chains_total,omitempty"`
+	RoutesTotal       int64             `json:"routes_total,omitempty"`
+	ActionsTotal      int64             `json:"actions_total,omitempty"`
+	DecisionHistogram []HistogramBucket `json:"decision_latency_histogram,omitempty"`
+	ChainHistogram    []HistogramBucket `json:"chain_latency_histogram,omitempty"`
+	RouteHistogram    []HistogramBucket `json:"route_latency_histogram,omitempty"`
+	ActionHistogram   []HistogramBucket `json:"action_latency_histogram,omitempty"`
 }
 
 type HistogramBucket struct {

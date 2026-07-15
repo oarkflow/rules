@@ -125,24 +125,24 @@ Here are high-value next features that would make Condition feel like a serious,
 
 ## Phase 5: Testing, Simulation, And Governance
 - [x] Add lifecycle test blocks for full request/response/error sequences.
-- [ ] Add stateful scenario tests with clock controls.
+- [x] Add stateful scenario tests with clock controls.
 - [x] Add route coverage gates to ensure every route has a policy.
-- [ ] Add mutation and blast-radius checks for policy releases.
-- [ ] Add approval policies based on action severity and external sinks.
-- [ ] Add signed policy bundles and bundle verification.
+- [x] Add mutation and blast-radius checks for policy releases.
+- [x] Add approval policies based on action severity and external sinks.
+- [x] Add signed policy bundles and bundle verification.
 
 ## Phase 6: Observability And Operations
-- [ ] Add decision, chain, lifecycle, route, and action metrics.
+- [x] Add decision, chain, lifecycle, route, and action metrics.
 - [x] Add state cardinality and retention reports.
 - [x] Add policy health/readiness checks for stale definitions, failed actions, and large state.
 - [x] Add trace IDs and audit IDs to lifecycle responses.
 - [x] Add state compaction and retention controls.
-- [ ] Add Postgres storage backend for production deployments.
+- [x] Add Postgres storage backend for production deployments.
 
 ## Phase 7: Developer Experience
 - [x] Add VSCode grammar/snippets for routes, lifecycle, chain, watch, and step.
 - [x] Add LSP diagnostics for route conflicts and lifecycle references.
 - [x] Add completions for route IDs, lifecycle IDs, phase names, chain IDs, and action IDs.
 - [x] Add hover details for normalized route patterns and lifecycle phase flow.
-- [ ] Add policy graph view: route -> lifecycle -> decision -> chain -> action.
-- [ ] Add local lifecycle playground for JSON request/response inputs.
+- [x] Add policy graph/semantic IR: route -> lifecycle -> decision -> chain -> action.
+- [x] Add local lifecycle playground for JSON request/response inputs.

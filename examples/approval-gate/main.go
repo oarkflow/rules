@@ -28,7 +28,8 @@ func main() {
 		RequireActivationApproval: true,
 	})
 
-	fmt.Println("=== Approval Gate: Deploy Policy with Activation Approval ===\n")
+	fmt.Println("=== Approval Gate: Deploy Policy with Activation Approval ===")
+	fmt.Println()
 
 	fmt.Println("Step 1: Publish policy version 1 (not yet active)")
 	pub, err := svc.Publish(ctx, rules.PublishRequest{

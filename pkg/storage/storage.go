@@ -245,6 +245,13 @@ type Store interface {
 	Stats(ctx context.Context) (StatsRecord, error)
 }
 
+// EntityLocker is an optional cross-worker serialization capability. Stores
+// that implement it let the rules service make an entity's read/evaluate/write
+// cycle exclusive without forcing every storage adapter to use one mechanism.
+type EntityLocker interface {
+	LockEntity(ctx context.Context, key string) (unlock func() error, err error)
+}
+
 func ApplyListOptions[T any](items []T, opts ListOptions, include func(T) bool) []T {
 	var filtered []T
 	for _, item := range items {

@@ -1,0 +1,22 @@
+openapi: 3.1.0
+info:
+  title: Production Features API
+  version: 1.0.0
+paths:
+  /signals:
+    post:
+      operationId: signals
+      tags: [operations]
+      x-condition:
+        owner: platform-policy
+        sensitivity: high
+      responses:
+        "202":
+          description: Signal accepted
+  /health:
+    get:
+      operationId: health
+      tags: [operations]
+      responses:
+        "200":
+          description: Healthy

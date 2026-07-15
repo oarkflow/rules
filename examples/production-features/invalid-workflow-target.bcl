@@ -1,0 +1,11 @@
+bcl { version "1.0" strict true }
+
+workflow "invalid_target_example" {
+  start "intake"
+  stage "intake" {
+    rule "broken_transition" {
+      default true
+      next_stage "missing_stage"
+    }
+  }
+}

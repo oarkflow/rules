@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
@@ -28,17 +29,17 @@ type ApprovalSink struct {
 }
 
 type ApprovalRequestRecord struct {
-	Definition  string    `json:"definition"`
-	Version     string    `json:"version"`
-	Environment string    `json:"environment,omitempty"`
-	Severity    string    `json:"severity"`
-	RequestedBy string    `json:"requested_by,omitempty"`
-	Reason      string    `json:"reason,omitempty"`
-	Status      string    `json:"status"`
-	ApprovedBy  string    `json:"approved_by,omitempty"`
+	Definition  string     `json:"definition"`
+	Version     string     `json:"version"`
+	Environment string     `json:"environment,omitempty"`
+	Severity    string     `json:"severity"`
+	RequestedBy string     `json:"requested_by,omitempty"`
+	Reason      string     `json:"reason,omitempty"`
+	Status      string     `json:"status"`
+	ApprovedBy  string     `json:"approved_by,omitempty"`
 	ApprovedAt  *time.Time `json:"approved_at,omitempty"`
-	Resolution  string    `json:"resolution,omitempty"`
-	CreatedAt   time.Time `json:"created_at"`
+	Resolution  string     `json:"resolution,omitempty"`
+	CreatedAt   time.Time  `json:"created_at"`
 }
 
 func (s *Service) CheckApproval(ctx context.Context, definition, version, environment string) (bool, *ApprovalPolicyRule, error) {
@@ -108,11 +109,11 @@ func (s *Service) NotifyApprovalSink(ctx context.Context, req ApprovalRequestRec
 	}
 	switch sink.Type {
 	case ApprovalSinkWebhook:
-		return notifyWebhook(ctx, sink.URL, sink.Token, payload)
+		return s.notifyApprovalWebhook(ctx, sink.URL, sink.Token, payload)
 	case ApprovalSinkSlack:
-		return notifySlack(sink, req)
+		return s.notifySlack(ctx, sink, req)
 	case ApprovalSinkEmail:
-		return notifyEmail(sink, req)
+		return s.notifyEmail(ctx, sink, req)
 	default:
 		return fmt.Errorf("unsupported approval sink type %q", sink.Type)
 	}
@@ -158,8 +159,26 @@ func severityMeetsThreshold(severity, minSeverity string) bool {
 	return sRank >= mRank
 }
 
-func notifyWebhook(ctx context.Context, url, token string, payload []byte) error {
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(payload))
+func (s *Service) notifyApprovalWebhook(ctx context.Context, rawURL, token string, payload []byte) error {
+	parsed, err := url.Parse(rawURL)
+	if err != nil || parsed.Hostname() == "" {
+		return fmt.Errorf("invalid approval webhook URL")
+	}
+	hosts := s.cfg.Runtime.AllowedWebhookHosts
+	if len(hosts) == 0 {
+		hosts = s.cfg.Runtime.AllowedHTTPHosts
+	}
+	if !stringAllowed(hosts, parsed.Hostname()) {
+		return fmt.Errorf("approval webhook host %q is not allowlisted", parsed.Hostname())
+	}
+	methods := s.cfg.Runtime.AllowedWebhookMethods
+	if len(methods) == 0 {
+		methods = s.cfg.Runtime.AllowedHTTPMethods
+	}
+	if !stringAllowed(methods, http.MethodPost) {
+		return fmt.Errorf("approval webhook method POST is not allowlisted")
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, rawURL, bytes.NewReader(payload))
 	if err != nil {
 		return err
 	}
@@ -167,7 +186,14 @@ func notifyWebhook(ctx context.Context, url, token string, payload []byte) error
 	if token != "" {
 		req.Header.Set("Authorization", "Bearer "+token)
 	}
-	resp, err := http.DefaultClient.Do(req)
+	timeout := s.cfg.Runtime.WebhookTimeout
+	if timeout <= 0 {
+		timeout = s.cfg.Runtime.ExternalTimeout
+	}
+	if timeout <= 0 {
+		timeout = 2 * time.Second
+	}
+	resp, err := (&http.Client{Timeout: timeout}).Do(req)
 	if err != nil {
 		return err
 	}
@@ -178,15 +204,15 @@ func notifyWebhook(ctx context.Context, url, token string, payload []byte) error
 	return nil
 }
 
-func notifySlack(sink ApprovalSink, req ApprovalRequestRecord) error {
+func (s *Service) notifySlack(ctx context.Context, sink ApprovalSink, req ApprovalRequestRecord) error {
 	channel := "approvals"
 	if ch, ok := sink.Config["channel"].(string); ok {
 		channel = ch
 	}
 	msg := fmt.Sprintf("Approval required: %s %s (severity: %s) requested by %s", req.Definition, req.Version, req.Severity, req.RequestedBy)
 	payload, _ := json.Marshal(map[string]any{
-		"channel":   channel,
-		"text":      msg,
+		"channel": channel,
+		"text":    msg,
 		"attachments": []map[string]any{{
 			"fallback": msg,
 			"fields": []map[string]any{
@@ -197,10 +223,10 @@ func notifySlack(sink ApprovalSink, req ApprovalRequestRecord) error {
 			},
 		}},
 	})
-	return notifyWebhook(context.Background(), sink.URL, sink.Token, payload)
+	return s.notifyApprovalWebhook(ctx, sink.URL, sink.Token, payload)
 }
 
-func notifyEmail(sink ApprovalSink, req ApprovalRequestRecord) error {
+func (s *Service) notifyEmail(ctx context.Context, sink ApprovalSink, req ApprovalRequestRecord) error {
 	to := "approver@example.com"
 	if t, ok := sink.Config["to"].(string); ok {
 		to = t
@@ -213,7 +239,7 @@ func notifyEmail(sink ApprovalSink, req ApprovalRequestRecord) error {
 		"subject": subject,
 		"body":    body,
 	})
-	return notifyWebhook(context.Background(), sink.URL, sink.Token, payload)
+	return s.notifyApprovalWebhook(ctx, sink.URL, sink.Token, payload)
 }
 
 func (s *Service) requestApprovalIfNeeded(ctx context.Context, record storage.DefinitionRecord) error {

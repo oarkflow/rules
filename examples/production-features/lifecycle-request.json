@@ -1,0 +1,13 @@
+{
+  "evaluation_id": "signal-request-cli-001",
+  "phase": "post",
+  "method": "POST",
+  "path": "/signals",
+  "event": "notify",
+  "input": {
+    "request": {
+      "actor_key": "cli-user",
+      "signal": true
+    }
+  }
+}

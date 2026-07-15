@@ -28,7 +28,7 @@ go run ./examples/complete-platform --serve --addr :8082
 Validate only the policy package:
 
 ```sh
-go run ./cmd/condition validate --name complete-platform ./examples/complete-platform/decision.bcl
+go run ./cmd/rules validate --name complete-platform ./examples/complete-platform/decision.bcl
 ```
 
 ## Policy Layout

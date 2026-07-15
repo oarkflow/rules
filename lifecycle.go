@@ -758,8 +758,10 @@ func stableID(value string) string {
 func (s *Service) dispatchLifecycleAction(ctx context.Context, record storage.DefinitionRecord, action LifecycleAction) (bool, *ActionResult) {
 	start := time.Now()
 	defer func() {
+		elapsed := float64(time.Since(start).Milliseconds())
+		s.observeLatency("action", elapsed)
 		if s.cfg.OnAction != nil {
-			s.cfg.OnAction(float64(time.Since(start).Milliseconds()))
+			s.cfg.OnAction(elapsed)
 		}
 	}()
 	if allowed, reason := s.actionRuntimeAllowed(ctx, record, action); !allowed {

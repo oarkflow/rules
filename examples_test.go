@@ -10,7 +10,7 @@ import (
 )
 
 func TestConditionExamplesValidateStrict(t *testing.T) {
-	root := filepath.Join("..", "..", "examples")
+	root := "examples"
 	err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err

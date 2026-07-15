@@ -11,24 +11,26 @@ import (
 )
 
 type Config struct {
-	Environment               string                   `json:"environment,omitempty"`
-	DefaultTenant             string                   `json:"default_tenant,omitempty"`
-	RequestTimeout            time.Duration            `json:"request_timeout,omitempty"`
-	MaxRequestBytes           int64                    `json:"max_request_bytes,omitempty"`
-	StrictValidation          bool                     `json:"strict_validation,omitempty"`
-	StrictEvaluation          bool                     `json:"strict_evaluation,omitempty"`
-	RequireActivationApproval bool                     `json:"require_activation_approval,omitempty"`
-	RequireTests              bool                     `json:"require_tests,omitempty"`
-	Runtime                   RuntimePolicy            `json:"runtime,omitempty"`
-	Routes                    []routing.Route          `json:"routes,omitempty"`
-	ActionHandlers            map[string]ActionHandler `json:"-"`
-	Clock                     func() time.Time         `json:"-"`
-	OnDecision                func(durationMs float64) `json:"-"`
-	OnChain                   func(durationMs float64) `json:"-"`
-	OnAction                  func(durationMs float64) `json:"-"`
-	ApprovalPolicies          []ApprovalPolicyRule     `json:"approval_policies,omitempty"`
-	ApprovalSinks             []ApprovalSink           `json:"approval_sinks,omitempty"`
-	RedactConfig              *PIIRedactionConfig      `json:"redact_config,omitempty"`
+	Environment               string                      `json:"environment,omitempty"`
+	DefaultTenant             string                      `json:"default_tenant,omitempty"`
+	RequestTimeout            time.Duration               `json:"request_timeout,omitempty"`
+	MaxRequestBytes           int64                       `json:"max_request_bytes,omitempty"`
+	StrictValidation          bool                        `json:"strict_validation,omitempty"`
+	StrictEvaluation          bool                        `json:"strict_evaluation,omitempty"`
+	RequireActivationApproval bool                        `json:"require_activation_approval,omitempty"`
+	RequireTests              bool                        `json:"require_tests,omitempty"`
+	Runtime                   RuntimePolicy               `json:"runtime,omitempty"`
+	Routes                    []routing.Route             `json:"routes,omitempty"`
+	ActionHandlers            map[string]ActionHandler    `json:"-"`
+	Clock                     func() time.Time            `json:"-"`
+	OnDecision                func(durationMs float64)    `json:"-"`
+	OnChain                   func(durationMs float64)    `json:"-"`
+	OnAction                  func(durationMs float64)    `json:"-"`
+	ApprovalPolicies          []ApprovalPolicyRule        `json:"approval_policies,omitempty"`
+	ApprovalSinks             []ApprovalSink              `json:"approval_sinks,omitempty"`
+	RedactConfig              *PIIRedactionConfig         `json:"redact_config,omitempty"`
+	SignaturePolicy           SignatureVerificationPolicy `json:"signature_policy,omitempty"`
+	TrustedPublicKeys         map[string]string           `json:"trusted_public_keys,omitempty"`
 }
 
 type RuntimePolicy struct {
@@ -45,7 +47,17 @@ type RuntimePolicy struct {
 	WebhookTimeout         time.Duration     `json:"webhook_timeout,omitempty"`
 	ExternalTimeout        time.Duration     `json:"external_timeout,omitempty"`
 	MaxStateRecords        int               `json:"max_state_records,omitempty"`
+	TenantQuotas           []TenantQuota     `json:"tenant_quotas,omitempty"`
 	Metadata               map[string]any    `json:"metadata,omitempty"`
+}
+
+type TenantQuota struct {
+	TenantID            string `json:"tenant_id,omitempty"`
+	Environment         string `json:"environment,omitempty"`
+	MaxEvents           int    `json:"max_events,omitempty"`
+	MaxStates           int    `json:"max_states,omitempty"`
+	MaxActionDeliveries int    `json:"max_action_deliveries,omitempty"`
+	MaxIncidents        int    `json:"max_incidents,omitempty"`
 }
 
 type ActionAllowlist struct {
@@ -67,6 +79,7 @@ type PublishRequest struct {
 	Strict       bool           `json:"strict,omitempty"`
 	RequireTests bool           `json:"require_tests,omitempty"`
 	Bundle       string         `json:"bundle,omitempty"`
+	SignedBundle *SignedBundle  `json:"signed_bundle,omitempty"`
 	Metadata     map[string]any `json:"metadata,omitempty"`
 }
 
@@ -103,6 +116,7 @@ type ChainEvaluateRequest struct {
 	TenantID  string         `json:"tenant_id,omitempty"`
 	Input     map[string]any `json:"input,omitempty"`
 	Event     string         `json:"event,omitempty"`
+	EventID   string         `json:"event_id,omitempty"`
 	EntityKey string         `json:"entity_key,omitempty"`
 	Strict    bool           `json:"strict,omitempty"`
 }
@@ -133,17 +147,55 @@ type ChainDecisionResult struct {
 }
 
 type LifecycleEvaluateRequest struct {
-	TenantID  string         `json:"tenant_id,omitempty"`
-	Phase     string         `json:"phase"`
-	Method    string         `json:"method,omitempty"`
-	Path      string         `json:"path,omitempty"`
-	Request   map[string]any `json:"request,omitempty"`
-	Input     map[string]any `json:"input,omitempty"`
-	Response  map[string]any `json:"response,omitempty"`
-	Event     string         `json:"event,omitempty"`
-	EntityKey string         `json:"entity_key,omitempty"`
-	Strict    bool           `json:"strict,omitempty"`
-	DryRun    bool           `json:"dry_run,omitempty"`
+	TenantID     string         `json:"tenant_id,omitempty"`
+	EvaluationID string         `json:"evaluation_id,omitempty"`
+	Phase        string         `json:"phase"`
+	Method       string         `json:"method,omitempty"`
+	Path         string         `json:"path,omitempty"`
+	Request      map[string]any `json:"request,omitempty"`
+	Input        map[string]any `json:"input,omitempty"`
+	Response     map[string]any `json:"response,omitempty"`
+	Event        string         `json:"event,omitempty"`
+	EntityKey    string         `json:"entity_key,omitempty"`
+	Strict       bool           `json:"strict,omitempty"`
+	DryRun       bool           `json:"dry_run,omitempty"`
+}
+
+type ActionRetryRequest struct {
+	TenantID string    `json:"tenant_id,omitempty"`
+	Limit    int       `json:"limit,omitempty"`
+	Now      time.Time `json:"now,omitempty"`
+}
+
+type ActionRetryResult struct {
+	Scanned     int      `json:"scanned"`
+	Delivered   int      `json:"delivered"`
+	Rescheduled int      `json:"rescheduled"`
+	DeadLetter  int      `json:"dead_letter"`
+	DeliveryIDs []string `json:"delivery_ids,omitempty"`
+}
+
+type IncidentUpdateRequest struct {
+	TenantID string `json:"tenant_id,omitempty"`
+	Status   string `json:"status"`
+	Reason   string `json:"reason,omitempty"`
+	Actor    string `json:"actor,omitempty"`
+}
+
+type MutationResult struct {
+	ID     string `json:"id"`
+	Kind   string `json:"kind"`
+	Target string `json:"target"`
+	Killed bool   `json:"killed"`
+}
+
+type MutationReport struct {
+	Definition string           `json:"definition"`
+	Total      int              `json:"total"`
+	Killed     int              `json:"killed"`
+	Score      float64          `json:"score"`
+	Survived   []MutationResult `json:"survived,omitempty"`
+	Results    []MutationResult `json:"results,omitempty"`
 }
 
 type LifecycleEvaluateResponse struct {
@@ -303,6 +355,7 @@ type OutputContractDefinition struct {
 type StandardFactContract struct {
 	ID       string            `json:"id"`
 	Facts    map[string]string `json:"facts,omitempty"`
+	Strict   bool              `json:"strict,omitempty"`
 	Metadata map[string]any    `json:"metadata,omitempty"`
 }
 
@@ -528,7 +581,10 @@ type WorkflowTransition struct {
 	ID        string         `json:"id,omitempty"`
 	NextStage string         `json:"next_stage,omitempty"`
 	When      map[string]any `json:"when,omitempty"`
+	WhenExpr  string         `json:"when_expr,omitempty"`
 	Events    []string       `json:"events,omitempty"`
+	Priority  int            `json:"priority,omitempty"`
+	Default   bool           `json:"default,omitempty"`
 }
 
 type WorkflowRun struct {
@@ -554,15 +610,27 @@ type WorkflowRequest struct {
 	Environment string         `json:"environment,omitempty"`
 }
 
+type WorkflowTickRequest struct {
+	TenantID string    `json:"tenant_id,omitempty"`
+	Now      time.Time `json:"now,omitempty"`
+	Limit    int       `json:"limit,omitempty"`
+}
+
+type WorkflowTickResult struct {
+	Scanned  int      `json:"scanned"`
+	TimedOut int      `json:"timed_out"`
+	RunIDs   []string `json:"run_ids,omitempty"`
+}
+
 type ApprovalPolicyRule struct {
-	ID           string          `json:"id,omitempty"`
-	MinSeverity  string          `json:"min_severity,omitempty"`
-	Definitions  []string        `json:"definitions,omitempty"`
-	Environments []string        `json:"environments,omitempty"`
-	Sinks        []ApprovalSink  `json:"sinks,omitempty"`
-	RequireOwner bool            `json:"require_owner,omitempty"`
-	MaxAge       string          `json:"max_age,omitempty"`
-	Metadata     map[string]any  `json:"metadata,omitempty"`
+	ID           string         `json:"id,omitempty"`
+	MinSeverity  string         `json:"min_severity,omitempty"`
+	Definitions  []string       `json:"definitions,omitempty"`
+	Environments []string       `json:"environments,omitempty"`
+	Sinks        []ApprovalSink `json:"sinks,omitempty"`
+	RequireOwner bool           `json:"require_owner,omitempty"`
+	MaxAge       string         `json:"max_age,omitempty"`
+	Metadata     map[string]any `json:"metadata,omitempty"`
 }
 
 type BlastRadiusReport struct {
@@ -613,14 +681,14 @@ type DepEdge struct {
 }
 
 type GovernanceMetadata struct {
-	Owner              string   `json:"owner,omitempty"`
-	Domain             string   `json:"domain,omitempty"`
-	Tags               []string `json:"tags,omitempty"`
+	Owner                string   `json:"owner,omitempty"`
+	Domain               string   `json:"domain,omitempty"`
+	Tags                 []string `json:"tags,omitempty"`
 	ComplianceFrameworks []string `json:"compliance_frameworks,omitempty"`
-	DataClassification string   `json:"data_classification,omitempty"`
-	ReviewRequired     bool     `json:"review_required,omitempty"`
-	ReviewInterval     string   `json:"review_interval,omitempty"`
-	LastReviewed       string   `json:"last_reviewed,omitempty"`
+	DataClassification   string   `json:"data_classification,omitempty"`
+	ReviewRequired       bool     `json:"review_required,omitempty"`
+	ReviewInterval       string   `json:"review_interval,omitempty"`
+	LastReviewed         string   `json:"last_reviewed,omitempty"`
 }
 
 type OwnershipRecord struct {
@@ -633,16 +701,16 @@ type OwnershipRecord struct {
 }
 
 type LatencyHistogram struct {
-	Label string    `json:"label"`
+	Label   string   `json:"label"`
 	Buckets []Bucket `json:"buckets,omitempty"`
-	P50   float64   `json:"p50,omitempty"`
-	P90   float64   `json:"p90,omitempty"`
-	P99   float64   `json:"p99,omitempty"`
-	Count int64     `json:"count"`
-	Total float64   `json:"total_ms"`
+	P50     float64  `json:"p50,omitempty"`
+	P90     float64  `json:"p90,omitempty"`
+	P99     float64  `json:"p99,omitempty"`
+	Count   int64    `json:"count"`
+	Total   float64  `json:"total_ms"`
 }
 
 type Bucket struct {
-	Le     float64 `json:"le"`
-	Count  int64   `json:"count"`
+	Le    float64 `json:"le"`
+	Count int64   `json:"count"`
 }

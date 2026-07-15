@@ -22,6 +22,14 @@ type MemoryStore struct {
 	chainStates map[string]ChainStateRecord
 	actions     map[string]ActionDeliveryRecord
 	incidents   map[string]IncidentRecord
+	entityLocks sync.Map
+}
+
+func (s *MemoryStore) LockEntity(ctx context.Context, key string) (func() error, error) {
+	value, _ := s.entityLocks.LoadOrStore(key, &sync.Mutex{})
+	mu := value.(*sync.Mutex)
+	mu.Lock()
+	return func() error { mu.Unlock(); return nil }, nil
 }
 
 func NewMemoryStore() *MemoryStore {

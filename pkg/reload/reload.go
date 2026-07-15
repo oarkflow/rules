@@ -5,10 +5,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"sync"
 	"time"
 
-	"github.com/oarkflow/bcl"
 	"github.com/oarkflow/rules"
 )
 
@@ -43,47 +41,28 @@ func (w Watcher) Watch(ctx context.Context, req rules.ReloadRequest, onReload fu
 	watchReq := req
 	watchReq.Path = root
 	includeImports := watchReq.IncludeImports == nil || *watchReq.IncludeImports
-	opts := &bcl.Options{ResolveImports: includeImports, ResolveModules: true, BaseDir: filepath.Dir(root)}
-
-	events := make(chan bcl.WatchEvent, 16)
-	var stop chan struct{}
-	if includeImports {
-		stop = bcl.WatchFilesWithDependencies([]string{root}, opts, func(event bcl.WatchEvent) {
-			select {
-			case events <- event:
-			default:
-			}
-		})
-	} else {
-		stop = bcl.WatchFiles([]string{root}, opts, func(event bcl.WatchEvent) {
-			select {
-			case events <- event:
-			default:
-			}
-		})
+	pollInterval := w.Interval
+	if pollInterval <= 0 {
+		pollInterval = 50 * time.Millisecond
 	}
-	if stop != nil {
-		defer close(stop)
-	}
-	snapshot := snapshotBCLFiles(filepath.Dir(root))
-
-	var (
-		mu      sync.Mutex
-		timer   *time.Timer
-		pending bcl.WatchEvent
-	)
-	fire := func(event bcl.WatchEvent) {
-		changed, nextSnapshot := changedBCLPath(snapshotBCLFiles(filepath.Dir(root)), snapshot)
-		if changed != "" {
-			event.Path = changed
-			event.Dependency = changed
+	snapshotFiles := func() map[string]time.Time {
+		if includeImports {
+			return snapshotBCLFiles(filepath.Dir(root))
 		}
-		snapshot = nextSnapshot
+		return snapshotBCLFile(root)
+	}
+	snapshot := snapshotFiles()
+	ticker := time.NewTicker(pollInterval)
+	defer ticker.Stop()
+	var timer *time.Timer
+	var timerC <-chan time.Time
+	pending := root
+	fire := func(changed string) {
 		reloadReq := watchReq
 		resp, _ := w.Service.Reload(ctx, reloadReq)
 		if resp != nil {
-			resp.ChangedPath = firstNonEmpty(event.Path, event.Dependency, root)
-			resp.DependencyPath = firstNonEmpty(event.Dependency, event.Path, root)
+			resp.ChangedPath = firstNonEmpty(changed, root)
+			resp.DependencyPath = firstNonEmpty(changed, root)
 		}
 		if onReload != nil {
 			onReload(resp)
@@ -92,25 +71,33 @@ func (w Watcher) Watch(ctx context.Context, req rules.ReloadRequest, onReload fu
 	for {
 		select {
 		case <-ctx.Done():
-			mu.Lock()
 			if timer != nil {
 				timer.Stop()
 			}
-			mu.Unlock()
 			return ctx.Err()
-		case event := <-events:
-			mu.Lock()
-			pending = event
-			if timer != nil {
-				timer.Stop()
+		case <-ticker.C:
+			current := snapshotFiles()
+			changed, nextSnapshot := changedBCLPath(current, snapshot)
+			snapshot = nextSnapshot
+			if changed == "" {
+				continue
 			}
-			timer = time.AfterFunc(debounce, func() {
-				mu.Lock()
-				event := pending
-				mu.Unlock()
-				fire(event)
-			})
-			mu.Unlock()
+			pending = changed
+			if timer != nil {
+				if !timer.Stop() {
+					select {
+					case <-timer.C:
+					default:
+					}
+				}
+				timer.Reset(debounce)
+			} else {
+				timer = time.NewTimer(debounce)
+			}
+			timerC = timer.C
+		case <-timerC:
+			timerC = nil
+			fire(pending)
 		}
 	}
 }
@@ -154,6 +141,14 @@ func snapshotBCLFiles(root string) map[string]time.Time {
 		out[path] = info.ModTime()
 		return nil
 	})
+	return out
+}
+
+func snapshotBCLFile(path string) map[string]time.Time {
+	out := map[string]time.Time{}
+	if info, err := os.Stat(path); err == nil && !info.IsDir() {
+		out[path] = info.ModTime()
+	}
 	return out
 }
 

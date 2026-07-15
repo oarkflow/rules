@@ -19,9 +19,31 @@ import (
 )
 
 type Service struct {
-	store   storage.Store
-	cfg     Config
-	auditMu sync.Mutex
+	store       storage.Store
+	cfg         Config
+	cfgMu       sync.RWMutex
+	auditMu     sync.Mutex
+	entityLocks sync.Map
+	latencyMu   sync.Mutex
+	latencies   map[string][]float64
+}
+
+func (s *Service) lockEntity(key string) func() {
+	value, _ := s.entityLocks.LoadOrStore(key, &sync.Mutex{})
+	mu := value.(*sync.Mutex)
+	mu.Lock()
+	return mu.Unlock
+}
+
+func (s *Service) lockStoredEntity(ctx context.Context, key string) (func(), error) {
+	if locker, ok := s.store.(storage.EntityLocker); ok {
+		unlock, err := locker.LockEntity(ctx, key)
+		if err != nil {
+			return nil, err
+		}
+		return func() { _ = unlock() }, nil
+	}
+	return s.lockEntity(key), nil
 }
 
 func NewService(store storage.Store, cfg Config) *Service {
@@ -40,7 +62,7 @@ func NewService(store storage.Store, cfg Config) *Service {
 	if cfg.MaxRequestBytes == 0 {
 		cfg.MaxRequestBytes = 1 << 20
 	}
-	return &Service{store: store, cfg: cfg}
+	return &Service{store: store, cfg: cfg, latencies: map[string][]float64{}}
 }
 
 func (s *Service) Store() storage.Store { return s.store }
@@ -49,12 +71,112 @@ func (s *Service) Config() Config {
 	if s == nil {
 		return Config{}
 	}
+	s.cfgMu.RLock()
+	defer s.cfgMu.RUnlock()
 	return s.cfg
+}
+
+// SetObservers installs runtime latency observers. It exists separately from
+// Config so adapters such as the HTTP server can attach instrumentation after
+// the service has been constructed without mutating a discarded config copy.
+func (s *Service) SetObservers(onDecision, onChain, onAction func(float64)) {
+	if s == nil {
+		return
+	}
+	s.cfgMu.Lock()
+	s.cfg.OnDecision = onDecision
+	s.cfg.OnChain = onChain
+	s.cfg.OnAction = onAction
+	s.cfgMu.Unlock()
 }
 
 func (s *Service) ListActionDeliveries(ctx context.Context, query storage.ActionDeliveryQuery) ([]storage.ActionDeliveryRecord, error) {
 	ctx = s.requestContext(ctx, query.TenantID)
 	return s.store.ListActionDeliveries(ctx, query)
+}
+
+// RetryActions claims due retry records serially and dispatches them again.
+// Callers can invoke this from a scheduler; the HTTP server also exposes it as
+// an explicit operational endpoint so retries do not depend on request traffic.
+func (s *Service) RetryActions(ctx context.Context, req ActionRetryRequest) (ActionRetryResult, error) {
+	ctx = s.requestContext(ctx, req.TenantID)
+	now := req.Now.UTC()
+	if now.IsZero() {
+		now = s.now()
+	}
+	limit := req.Limit
+	if limit <= 0 {
+		limit = 100
+	}
+	records, err := s.store.ListActionDeliveries(ctx, storage.ActionDeliveryQuery{TenantID: req.TenantID, Status: "retry_scheduled", Limit: limit})
+	if err != nil {
+		return ActionRetryResult{}, err
+	}
+	result := ActionRetryResult{}
+	for _, delivery := range records {
+		if delivery.NextAttempt != nil && delivery.NextAttempt.After(now) {
+			continue
+		}
+		result.Scanned++
+		unlock, lockErr := s.lockStoredEntity(ctx, "action|"+delivery.ID)
+		if lockErr != nil {
+			return result, lockErr
+		}
+		fresh, refreshErr := s.store.ListActionDeliveries(ctx, storage.ActionDeliveryQuery{TenantID: req.TenantID, Status: "retry_scheduled"})
+		if refreshErr != nil {
+			unlock()
+			return result, refreshErr
+		}
+		found := false
+		for _, candidate := range fresh {
+			if candidate.ID == delivery.ID {
+				delivery = candidate
+				found = true
+				break
+			}
+		}
+		if !found || delivery.NextAttempt != nil && delivery.NextAttempt.After(now) {
+			unlock()
+			continue
+		}
+		record, getErr := s.store.GetDefinitionVersion(ctx, delivery.Definition, delivery.Version, delivery.Environment)
+		if getErr != nil {
+			unlock()
+			return result, getErr
+		}
+		action := LifecycleAction{Name: delivery.Action, Sink: delivery.Sink, DeliveryID: delivery.ID, ReasonCode: delivery.ReasonCode, Severity: delivery.Severity, Attributes: cloneMap(delivery.Attributes), Metadata: cloneMap(delivery.Metadata)}
+		handled, actionResult := s.dispatchLifecycleAction(ctx, record, action)
+		delivery.Attempts++
+		delivery.Handled = handled
+		delivery.UpdatedAt = now
+		delivery.NextAttempt = nil
+		if actionResult != nil {
+			delivery.Status = actionResult.Status
+			delivery.Error = actionResult.Error
+		}
+		if handled && delivery.Error == "" {
+			if delivery.Status == "" || delivery.Status == "retry_scheduled" {
+				delivery.Status = "delivered"
+			}
+			result.Delivered++
+		} else if delivery.Attempts >= delivery.MaxAttempts {
+			delivery.Status = "dead_letter"
+			result.DeadLetter++
+		} else {
+			delivery.Status = "retry_scheduled"
+			delay := time.Minute << min(delivery.Attempts-1, 6)
+			next := now.Add(delay)
+			delivery.NextAttempt = &next
+			result.Rescheduled++
+		}
+		if saveErr := s.store.SaveActionDelivery(ctx, delivery); saveErr != nil {
+			unlock()
+			return result, saveErr
+		}
+		unlock()
+		result.DeliveryIDs = append(result.DeliveryIDs, delivery.ID)
+	}
+	return result, nil
 }
 
 func (s *Service) ListChainStates(ctx context.Context, query storage.ChainStateQuery) ([]storage.ChainStateRecord, error) {
@@ -119,12 +241,71 @@ func (s *Service) BlastRadius(ctx context.Context, definition string, req Simula
 }
 
 func (s *Service) GetLatencyHistograms(ctx context.Context) []LatencyHistogram {
-	return nil
+	if s == nil {
+		return nil
+	}
+	s.latencyMu.Lock()
+	defer s.latencyMu.Unlock()
+	labels := sortedKeys(func() map[string]bool {
+		out := map[string]bool{}
+		for label := range s.latencies {
+			out[label] = true
+		}
+		return out
+	}())
+	result := make([]LatencyHistogram, 0, len(labels))
+	for _, label := range labels {
+		samples := append([]float64(nil), s.latencies[label]...)
+		sort.Float64s(samples)
+		histogram := LatencyHistogram{Label: label, Count: int64(len(samples))}
+		for _, sample := range samples {
+			histogram.Total += sample
+		}
+		histogram.P50 = latencyPercentile(samples, 0.50)
+		histogram.P90 = latencyPercentile(samples, 0.90)
+		histogram.P99 = latencyPercentile(samples, 0.99)
+		for _, boundary := range []float64{1, 5, 10, 25, 50, 100, 250, 500, 1000, 5000} {
+			bucket := Bucket{Le: boundary}
+			for _, sample := range samples {
+				if sample <= boundary {
+					bucket.Count++
+				}
+			}
+			histogram.Buckets = append(histogram.Buckets, bucket)
+		}
+		result = append(result, histogram)
+	}
+	_ = ctx
+	return result
+}
+
+func (s *Service) observeLatency(label string, milliseconds float64) {
+	if s == nil {
+		return
+	}
+	s.latencyMu.Lock()
+	samples := append(s.latencies[label], milliseconds)
+	if len(samples) > 4096 {
+		samples = append([]float64(nil), samples[len(samples)-4096:]...)
+	}
+	s.latencies[label] = samples
+	s.latencyMu.Unlock()
+}
+
+func latencyPercentile(samples []float64, quantile float64) float64 {
+	if len(samples) == 0 {
+		return 0
+	}
+	index := int(float64(len(samples)-1) * quantile)
+	return samples[index]
 }
 
 func (s *Service) PublishVersion(ctx context.Context, req PublishRequest) (*PublishResponse, error) {
 	ctx = s.requestContext(ctx, req.TenantID)
 	start := time.Now()
+	if err := s.verifyPublishBundle(&req); err != nil {
+		return nil, err
+	}
 	report, program, source, err := s.validatePublish(ctx, ValidationRequest{
 		Name: req.Name, Version: req.Version, Environment: req.Environment, Path: req.Path, Source: req.Source, BaseDir: req.BaseDir, RunTests: req.RunTests, Strict: req.Strict, RequireTests: req.RequireTests, Bundle: req.Bundle,
 	})
@@ -152,6 +333,7 @@ func (s *Service) PublishVersion(ctx context.Context, req PublishRequest) (*Publ
 		PublishedAt: time.Now(),
 		Metadata:    req.Metadata,
 	}
+	record.Metadata = policyGovernanceMetadata(program, record.Metadata)
 	needsApproval := false
 	if s.cfg.RequireActivationApproval && !metadataBool(record.Metadata, "approved") {
 		needsApproval = true
@@ -218,6 +400,13 @@ func (s *Service) Activate(ctx context.Context, name, version, environment strin
 	}
 	if s.cfg.RequireActivationApproval && !metadataBool(record.Metadata, "approved") {
 		err := fmt.Errorf("definition %q version %q requires approval before activation", name, version)
+		envelope, auditErr := s.audit(ctx, "activate_failed", name, version, env, record.Digest, map[string]any{"name": name, "version": version, "environment": env}, map[string]any{"error": err.Error()}, start, nil)
+		if auditErr != nil {
+			return nil, auditErr
+		}
+		return &ActivationResponse{Definition: record, Audit: envelope}, err
+	}
+	if err := validateGovernanceActivation(record, s.now()); err != nil {
 		envelope, auditErr := s.audit(ctx, "activate_failed", name, version, env, record.Digest, map[string]any{"name": name, "version": version, "environment": env}, map[string]any{"error": err.Error()}, start, nil)
 		if auditErr != nil {
 			return nil, auditErr
@@ -381,7 +570,11 @@ func (s *Service) Evaluate(ctx context.Context, definition string, req EvaluateR
 		Strict:          s.strictEvaluation(req.Strict),
 	}, opts)
 	if s.cfg.OnDecision != nil {
-		s.cfg.OnDecision(float64(time.Since(start).Milliseconds()))
+		elapsed := float64(time.Since(start).Milliseconds())
+		s.observeLatency("decision", elapsed)
+		s.cfg.OnDecision(elapsed)
+	} else {
+		s.observeLatency("decision", float64(time.Since(start).Milliseconds()))
 	}
 	if err != nil {
 		envelope, auditErr := s.audit(ctx, "evaluate_failed", definition, record.Version, record.Environment, record.Digest, req, map[string]any{"error": err.Error()}, start, nil)
@@ -449,6 +642,17 @@ func (s *Service) EvaluateChain(ctx context.Context, definition, chainID string,
 		}
 		return &ChainEvaluateResponse{Audit: envelope}, err
 	}
+	unlock, err := s.lockStoredEntity(ctx, strings.Join([]string{TenantFromContext(ctx), definition, record.Environment, chain.ID, entityKey}, "|"))
+	if err != nil {
+		return nil, err
+	}
+	defer unlock()
+	if err := s.enforceTenantQuota(ctx, "event"); err != nil {
+		return nil, err
+	}
+	if err := s.enforceTenantQuota(ctx, "state"); err != nil {
+		return nil, err
+	}
 	now := s.now()
 	_ = s.store.DeleteExpiredChainStates(ctx, now)
 	statesBefore := s.loadChainStates(ctx, chain, entityKey)
@@ -457,9 +661,26 @@ func (s *Service) EvaluateChain(ctx context.Context, definition, chainID string,
 		return nil, err
 	}
 	evaluation := ChainEvaluation{Chain: chain.ID, EntityKey: entityKey, StateBefore: cloneChainStates(statesBefore)}
+	if req.EventID != "" {
+		for _, existing := range allEvents {
+			if existing.ID == req.EventID {
+				evaluation.StateAfter = cloneChainStates(statesBefore)
+				evaluation.Diagnostics = append(evaluation.Diagnostics, bcl.Diagnostic{Severity: "info", Message: fmt.Sprintf("event %q was already processed", req.EventID)})
+				envelope, auditErr := s.audit(ctx, "chain_evaluate_idempotent", definition, record.Version, record.Environment, record.Digest, req, evaluation, start, nil)
+				if auditErr != nil {
+					return nil, auditErr
+				}
+				return &ChainEvaluateResponse{Evaluation: evaluation, Audit: envelope}, nil
+			}
+		}
+	}
 	pendingEvents := []storage.ChainEventRecord(nil)
 	if req.Event != "" {
-		pendingEvents = append(pendingEvents, s.newChainEvent(record, chain.ID, "", entityKey, req.Event, "", "", "", lifecycleActionFactAttributes(input), nil, nil))
+		event := s.newChainEvent(record, chain.ID, "", entityKey, req.Event, "", "", "", lifecycleActionFactAttributes(input), nil, nil)
+		if req.EventID != "" {
+			event.ID = req.EventID
+		}
+		pendingEvents = append(pendingEvents, event)
 	}
 	opts := s.bclOptions(ctx, s.strictEvaluation(req.Strict))
 	opts.Context = runtimeContext
@@ -517,7 +738,11 @@ func (s *Service) EvaluateChain(ctx context.Context, definition, chainID string,
 	}
 	evaluation.StateAfter = chainStateSlice(stateByWatch)
 	if s.cfg.OnChain != nil {
-		s.cfg.OnChain(float64(time.Since(start).Milliseconds()))
+		elapsed := float64(time.Since(start).Milliseconds())
+		s.observeLatency("chain", elapsed)
+		s.cfg.OnChain(elapsed)
+	} else {
+		s.observeLatency("chain", float64(time.Since(start).Milliseconds()))
 	}
 	if evaluation.FinalEffect == "" && evaluation.FinalDecision != nil {
 		evaluation.FinalEffect = evaluation.FinalDecision.Effect
@@ -596,6 +821,32 @@ func (s *Service) EvaluateLifecycle(ctx context.Context, definition, lifecycleID
 	}
 	if entityKey == "" || entityKey == "<nil>" {
 		entityKey = first(req.Path, req.Method, "lifecycle")
+	}
+	if err := s.enforceTenantQuota(ctx, "action"); err != nil {
+		return nil, err
+	}
+	if err := s.enforceTenantQuota(ctx, "incident"); err != nil {
+		return nil, err
+	}
+	var lifecycleUnlock func()
+	var idempotencyEntity string
+	if req.EvaluationID != "" {
+		idempotencyEntity = strings.Join([]string{TenantFromContext(ctx), definition, record.Environment, lifecycle.ID, phase.ID, entityKey}, "|")
+		lifecycleUnlock, err = s.lockStoredEntity(ctx, "lifecycle|"+idempotencyEntity)
+		if err != nil {
+			return nil, err
+		}
+		defer lifecycleUnlock()
+		if completed, stateErr := s.store.GetChainState(ctx, "__lifecycle__", req.EvaluationID, idempotencyEntity); stateErr == nil && completed.Metadata != nil {
+			if raw := completed.Metadata["response"]; raw != nil {
+				payload, _ := json.Marshal(raw)
+				var previous LifecycleEvaluateResponse
+				if json.Unmarshal(payload, &previous) == nil {
+					previous.Evaluation.Diagnostics = append(previous.Evaluation.Diagnostics, bcl.Diagnostic{Severity: "info", Message: fmt.Sprintf("evaluation %q was already processed", req.EvaluationID)})
+					return &previous, nil
+				}
+			}
+		}
 	}
 	evaluation := LifecycleEvaluation{Lifecycle: lifecycle.ID, Phase: phase.ID, TraceID: lifecycleTraceID(ctx), EntityKey: entityKey, Route: match}
 	opts := s.bclOptions(ctx, s.strictEvaluation(req.Strict))
@@ -678,7 +929,17 @@ func (s *Service) EvaluateLifecycle(ctx context.Context, definition, lifecycleID
 		return nil, err
 	}
 	evaluation.AuditID = envelope.ID
-	return &LifecycleEvaluateResponse{Evaluation: evaluation, Audit: envelope}, nil
+	response := &LifecycleEvaluateResponse{Evaluation: evaluation, Audit: envelope}
+	if req.EvaluationID != "" {
+		payload, _ := json.Marshal(response)
+		var stored map[string]any
+		_ = json.Unmarshal(payload, &stored)
+		state := storage.ChainStateRecord{TenantID: TenantFromContext(ctx), Definition: definition, Version: record.Version, Environment: record.Environment, Chain: "__lifecycle__", Watch: req.EvaluationID, EntityKey: idempotencyEntity, Metadata: map[string]any{"response": stored}, UpdatedAt: s.now()}
+		if err := s.store.UpsertChainState(ctx, state); err != nil {
+			return nil, err
+		}
+	}
+	return response, nil
 }
 
 func (s *Service) lifecycleChainContext(ctx context.Context, definition string, record storage.DefinitionRecord, lifecycle *LifecycleDefinition, input map[string]any) ([]storage.ChainStateRecord, []storage.ChainEventRecord) {
@@ -1055,7 +1316,7 @@ func (s *Service) StartWorkflow(ctx context.Context, definition, workflowID stri
 		CreatedAt:   time.Now(),
 		UpdatedAt:   time.Now(),
 	}
-	applyWorkflowStage(&run, workflow, input)
+	applyWorkflowStage(&run, workflow, input, s.now())
 	envelope, err := s.audit(ctx, "workflow_start", definition, record.Version, record.Environment, record.Digest, input, run, start, nil)
 	if err != nil {
 		return nil, err
@@ -1086,7 +1347,9 @@ func (s *Service) AdvanceWorkflow(ctx context.Context, runID string, input map[s
 	if len(input) > 0 {
 		run.Input = input
 	}
-	advanceWorkflowStage(&run, workflow, run.Input)
+	if err := advanceWorkflowStage(&run, workflow, run.Input, s.now()); err != nil {
+		return nil, err
+	}
 	run.UpdatedAt = time.Now()
 	envelope, err := s.audit(ctx, "workflow_advance", run.Definition, run.Version, run.Environment, definition.Digest, input, run, start, nil)
 	if err != nil {
@@ -1112,6 +1375,74 @@ func (s *Service) GetWorkflowRun(ctx context.Context, runID string) (*WorkflowRu
 func (s *Service) ListWorkflowRuns(ctx context.Context, opts storage.ListOptions) ([]storage.WorkflowRunRecord, error) {
 	ctx = s.requestContext(ctx, opts.TenantID)
 	return s.store.ListWorkflowRuns(ctx, opts)
+}
+
+// TickWorkflows advances workflow runs whose stage SLA has expired. It is
+// intentionally clock-driven so applications can run it from cron, a durable
+// scheduler, or deterministic tests.
+func (s *Service) TickWorkflows(ctx context.Context, req WorkflowTickRequest) (WorkflowTickResult, error) {
+	ctx = s.requestContext(ctx, req.TenantID)
+	now := req.Now.UTC()
+	if now.IsZero() {
+		now = s.now()
+	}
+	limit := req.Limit
+	if limit <= 0 {
+		limit = 100
+	}
+	records, err := s.store.ListWorkflowRuns(ctx, storage.ListOptions{TenantID: req.TenantID, Limit: limit})
+	if err != nil {
+		return WorkflowTickResult{}, err
+	}
+	result := WorkflowTickResult{}
+	for _, record := range records {
+		if record.Status != "running" {
+			continue
+		}
+		result.Scanned++
+		deadline, parseErr := time.Parse(time.RFC3339Nano, stringAny(record.Assignment["deadline"]))
+		if parseErr != nil || deadline.After(now) {
+			continue
+		}
+		next := stringAny(record.Assignment["on_timeout"])
+		if next == "" {
+			continue
+		}
+		unlock := s.lockEntity("workflow|" + record.ID)
+		definition, getErr := s.store.GetDefinitionVersion(ctx, record.Definition, record.Version, record.Environment)
+		if getErr != nil {
+			unlock()
+			return result, getErr
+		}
+		workflow, workflowErr := workflowDefinition(definition.Program, record.WorkflowID)
+		if workflowErr != nil {
+			unlock()
+			return result, workflowErr
+		}
+		run := workflowRunFromRecord(record)
+		run.Events = append(run.Events, "stage_timeout:"+run.Stage)
+		if findStage(workflow, next) == nil {
+			run.Status = "timed_out"
+		} else {
+			run.Stage = next
+			applyWorkflowStage(&run, workflow, run.Input, now)
+		}
+		run.UpdatedAt = now
+		envelope, auditErr := s.audit(ctx, "workflow_timeout", run.Definition, run.Version, run.Environment, definition.Digest, req, run, now, nil)
+		if auditErr != nil {
+			unlock()
+			return result, auditErr
+		}
+		run.Audit = &envelope
+		if saveErr := s.store.SaveWorkflowRun(ctx, workflowRunRecord(run)); saveErr != nil {
+			unlock()
+			return result, saveErr
+		}
+		unlock()
+		result.TimedOut++
+		result.RunIDs = append(result.RunIDs, run.ID)
+	}
+	return result, nil
 }
 
 func (s *Service) runTests(program *bcl.DecisionProgram, defaultDecision, bundle string, requireTests bool, definition, version, environment string) *TestReport {
@@ -1192,6 +1523,8 @@ func (s *Service) validatePublish(ctx context.Context, req ValidationRequest) (*
 		report.Diagnostics = append(report.Diagnostics, validateRoutesAndLifecycles(program)...)
 		report.Diagnostics = append(report.Diagnostics, validatePolicyContracts(program)...)
 		report.Diagnostics = append(report.Diagnostics, resultReferenceDiagnostics(program)...)
+		report.Diagnostics = append(report.Diagnostics, validateWorkflows(program)...)
+		report.Diagnostics = append(report.Diagnostics, CompilePolicyIR(program).Diagnostics...)
 	}
 	if strict {
 		requireVersionDeclaration(&report.Diagnostics)

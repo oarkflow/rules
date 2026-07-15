@@ -5,6 +5,7 @@ go 1.26.2
 require (
 	github.com/oarkflow/rules v0.0.4
 	github.com/oarkflow/squealx v0.0.78
+	golang.org/x/sys v0.47.0
 )
 
 require (
@@ -17,14 +18,14 @@ require (
 	github.com/jackc/puddle/v2 v2.2.2 // indirect
 	github.com/mattn/go-isatty v0.0.20 // indirect
 	github.com/ncruces/go-strftime v1.0.0 // indirect
-	github.com/oarkflow/bcl v0.0.30 // indirect
+	github.com/oarkflow/bcl v0.0.31 // indirect
+	github.com/oarkflow/convert v0.0.6 // indirect
 	github.com/oarkflow/date v0.0.4 // indirect
 	github.com/oarkflow/expr v0.0.11 // indirect
 	github.com/oarkflow/jet v0.0.4 // indirect
 	github.com/oarkflow/json v0.0.28 // indirect
 	github.com/remyoudompheng/bigfft v0.0.0-20230129092748-24d4a6f8daec // indirect
 	golang.org/x/sync v0.20.0 // indirect
-	golang.org/x/sys v0.47.0 // indirect
 	golang.org/x/text v0.36.0 // indirect
 	modernc.org/libc v1.73.4 // indirect
 	modernc.org/mathutil v1.7.1 // indirect

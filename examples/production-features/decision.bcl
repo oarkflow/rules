@@ -1,0 +1,173 @@
+bcl { version "1.0" strict true }
+version "1"
+environment "example"
+metadata { owner "platform-policy" domain "production-controls" }
+
+  policy_package "production_features" {
+    owner "platform-policy"
+    domain "production-controls"
+    version "1.0.0"
+    capabilities ["routes", "lifecycle", "state", "actions", "workflow"]
+    routes ["api"]
+    actions ["allow", "notify", "always_fail"]
+    state true
+    external true
+  }
+
+  action_catalog "operations" {
+    action "allow" { sink "event" severity "low" }
+    action "notify" { sink "webhook" severity "high" retries 2 }
+    action "always_fail" { sink "webhook" severity "high" retries 2 }
+  }
+
+  output_contract "enforcement" {
+    actions ["allow", "notify", "always_fail"]
+    severities ["low", "high"]
+  }
+
+  standard_facts "request_contract" {
+    strict true
+    fact "request"
+    fact "route"
+    fact "state"
+  }
+
+  routes "api" {
+    route "signals" { method "POST" pattern "/signals" metadata { owner "platform-policy" } }
+    route "health" { method "GET" pattern "/health" metadata { owner "platform-policy" } }
+  }
+
+  decision_table "observe_signal" {
+    contract "enforcement"
+    default allow
+    hit_policy first
+
+    row "notify-on-signal" {
+      priority 100
+      when { request.signal == true }
+      then {
+        outcome {
+          decision require_review
+          reason "operational signal requires notification"
+          attributes { action "notify" url "https://hooks.example.test/condition" }
+          metadata { severity "high" }
+        }
+      }
+      reason "operational signal requires notification"
+      reason_code "SIGNAL_NOTIFY"
+    }
+
+    row "dead-letter-demonstration" {
+      priority 90
+      when { request.deadletter == true }
+      then {
+        outcome {
+          decision require_review
+          reason "demonstrate a permanently failing action"
+          attributes { action "always_fail" url "https://hooks.example.test/condition" }
+          metadata { severity "high" }
+        }
+      }
+      reason "demonstrate a permanently failing action"
+      reason_code "ACTION_ALWAYS_FAILS"
+    }
+  }
+
+  chain "signal_history" {
+    entity "request.actor_key"
+    decision "observe_signal"
+    watch "notifications" {
+      event "notify"
+      window "10m"
+      cooldown "1m"
+      step "notify_once" { threshold 1 action "notify" severity "high" ttl "1m" }
+    }
+  }
+
+  lifecycle "api_request" {
+    entity "request.actor_key"
+    routes "api"
+    phase "post" {
+      decision "observe_signal"
+      chain "signal_history"
+    }
+  }
+
+  workflow "signal_review" {
+    start "intake"
+    stage "intake" {
+      queue "operations"
+      sla "1m"
+      on_timeout "expired"
+      rule "high_risk" {
+        priority 100
+        when {
+          all {
+            case.risk == "high"
+            any {
+              case.context.region == "restricted"
+              case.context.score >= 90
+            }
+            not {
+              case.flags.suppressed == true
+            }
+          }
+        }
+        next_stage "senior"
+        event "escalated"
+      }
+      rule "low_risk" {
+        priority 10
+        when { case.risk == "low" }
+        next_stage "complete"
+        event "auto_completed"
+      }
+      rule "restricted_region" {
+        priority 20
+        when { case.context.region == "restricted" }
+        next_stage "manual"
+        event "region_review"
+      }
+      rule "fallback" {
+        default true
+        next_stage "manual"
+        event "manual_triage"
+      }
+    }
+    stage "senior" { role "incident-manager" sla "30m" on_timeout "expired" }
+    stage "complete" { role "system" }
+    stage "manual" { role "operations-analyst" }
+    stage "expired" { role "operations-manager" }
+  }
+
+  lifecycle_test "stateful signal sequence" {
+    lifecycle "api_request"
+    phase "post"
+    method "POST"
+    path "/signals"
+    clock "2026-07-15T00:00:00Z"
+    input { request.actor_key "scenario-user" request.signal true }
+
+    step "first" {
+      event "notify"
+      expect { final_action "notify" state.notifications.action "notify" }
+    }
+
+    step "after-cooldown" {
+      after "2m"
+      event "notify"
+      expect { final_action "notify" state.notifications.count 2 }
+    }
+  }
+
+  test "signal requires review" {
+    decision "observe_signal"
+    input { request.signal true }
+    expect { effect "require_review" reason_code "SIGNAL_NOTIFY" }
+  }
+
+  test "permanent action failure" {
+    decision "observe_signal"
+    input { request.deadletter true }
+    expect { effect "require_review" reason_code "ACTION_ALWAYS_FAILS" }
+  }

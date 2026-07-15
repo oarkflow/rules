@@ -13,7 +13,7 @@ go run ./examples/anomaly-detection --serve --watch --addr :8083
 Validate the policy:
 
 ```sh
-go run ./cmd/condition validate --name anomaly-detection ./examples/anomaly-detection/decision.bcl
+go run ./cmd/rules validate --name anomaly-detection ./examples/anomaly-detection/decision.bcl
 ```
 
 ## What It Demonstrates
@@ -359,7 +359,7 @@ Also add a negative test when needed: same request body without trusted `context
 Validate first:
 
 ```sh
-go run ./cmd/condition validate --name anomaly-detection ./examples/anomaly-detection/decision.bcl
+go run ./cmd/rules validate --name anomaly-detection ./examples/anomaly-detection/decision.bcl
 ```
 
 Run the server:
@@ -422,7 +422,7 @@ The application never hardcodes `refund_anomaly`, `challenge`, `hold`, threshold
 - Import new files from `decision.bcl`.
 - Add BCL lifecycle tests.
 - Add Go/example tests if the host fact boundary or middleware mapping changed.
-- Run `go run ./cmd/condition validate --name anomaly-detection ./examples/anomaly-detection/decision.bcl`.
+- Run `go run ./cmd/rules validate --name anomaly-detection ./examples/anomaly-detection/decision.bcl`.
 - Run `go test ./examples/anomaly-detection ./pkg/condition`.
 - Use `/_state`, `/_events`, `/_actions`, `/_incidents`, `/_coverage`, and `/_readiness` to inspect behavior.
 

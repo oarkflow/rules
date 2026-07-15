@@ -1,0 +1,12 @@
+{
+  "case": {
+    "risk": "high",
+    "context": {
+      "region": "restricted",
+      "score": 40
+    },
+    "flags": {
+      "suppressed": false
+    }
+  }
+}

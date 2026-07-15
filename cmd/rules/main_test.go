@@ -1,6 +1,7 @@
 package main
 
 import (
+	"os"
 	"path/filepath"
 	"testing"
 
@@ -8,7 +9,7 @@ import (
 )
 
 func TestLoadConfigBCLProductionExample(t *testing.T) {
-	path := filepath.Join("..", "..", "examples", "production-server", "rules.local.bcl")
+	path := filepath.Join("..", "..", "examples", "production-server", "condition.local.bcl")
 	cfg, err := loadConfig(path)
 	if err != nil {
 		t.Fatal(err)
@@ -16,7 +17,7 @@ func TestLoadConfigBCLProductionExample(t *testing.T) {
 	if cfg.Address != ":8080" {
 		t.Fatalf("address = %q", cfg.Address)
 	}
-	if cfg.Store.Kind != "sqlite" || cfg.Store.Path == "" {
+	if cfg.Store.Kind != "file" || cfg.Store.Path == "" {
 		t.Fatalf("store = %#v", cfg.Store)
 	}
 	if cfg.Service.Environment != "production" ||
@@ -34,8 +35,22 @@ func TestLoadConfigBCLProductionExample(t *testing.T) {
 	}
 }
 
+func TestLoadConfigYAML(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "rules.yaml")
+	if err := os.WriteFile(path, []byte("address: ':9090'\nstore:\n  kind: memory\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := loadConfig(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Address != ":9090" || cfg.Store.Kind != "memory" {
+		t.Fatalf("config = %#v", cfg)
+	}
+}
+
 func TestProductionExampleAuthzLoads(t *testing.T) {
-	path := filepath.Join("..", "..", "examples", "production-server", "rules.authz")
+	path := filepath.Join("..", "..", "examples", "production-server", "condition.authz")
 	if _, err := server.AuthzEngineFromFile(path); err != nil {
 		t.Fatal(err)
 	}

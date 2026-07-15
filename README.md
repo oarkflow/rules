@@ -41,19 +41,26 @@ Condition now stores versioned definitions by `name + version + environment`, ke
 Core CLI commands:
 
 ```sh
-go run ./cmd/condition validate --name payment-risk ./examples/payment-risk/decision.bcl
-go run ./cmd/condition publish --name payment-risk --version 1 ./examples/payment-risk/decision.bcl
-go run ./cmd/condition versions payment-risk
-go run ./cmd/condition activate payment-risk 1
-go run ./cmd/condition evaluate payment-risk --decision payment_risk --input ./examples/payment-risk/inputs/authorize.json --compact
-go run ./cmd/condition rollback payment-risk 1
-go run ./cmd/condition canary payment-risk --candidate ./candidate.bcl --dataset payment_risk_batch --max-changed 0
-go run ./cmd/condition audits --definition payment-risk --operation evaluate --limit 50
-go run ./cmd/condition reports --kind simulation
-go run ./cmd/condition audit verify
+go run ./cmd/rules validate --name payment-risk ./examples/payment-risk/decision.bcl
+go run ./cmd/rules publish --name payment-risk --version 1 ./examples/payment-risk/decision.bcl
+go run ./cmd/rules versions payment-risk
+go run ./cmd/rules activate payment-risk 1
+go run ./cmd/rules evaluate payment-risk --decision payment_risk --input ./examples/payment-risk/inputs/authorize.json --compact
+go run ./cmd/rules rollback payment-risk 1
+go run ./cmd/rules canary payment-risk --candidate ./candidate.bcl --dataset payment_risk_batch --max-changed 0
+go run ./cmd/rules audits --definition payment-risk --operation evaluate --limit 50
+go run ./cmd/rules reports --kind simulation
+go run ./cmd/rules audit verify
+go run ./cmd/rules ir payment-risk
+go run ./cmd/rules mutation-test payment-risk
+go run ./cmd/rules lifecycle-evaluate payment-risk request --input request.json
+go run ./cmd/rules retry-actions --limit 100
+go run ./cmd/rules tick-workflows --limit 100
 ```
 
 Every command accepts `--config`; explicit command flags override config values. BCL is the native config format for Condition, and JSON/YAML remain supported for compatibility. A config file can set the address, environment, default tenant, store kind/path, request timeout, body limit, runtime policy, rate limit, HTTP server timeouts, TLS files, trusted proxy CIDRs, and `.authz` policy path. CLI commands also accept `--tenant`, defaulting to `default`.
+
+Production evaluation now supports durable idempotency keys (`event_id` and `evaluation_id`), cross-worker entity locks in file/SQLite/PostgreSQL stores, executable action retries, tenant state quotas, incident acknowledgement/resolution, signed policy publishing, mutation testing, and typed semantic policy IR. The `examples/production-features` runner demonstrates these features together.
 
 Production config example:
 
@@ -425,9 +432,9 @@ For Go tests, evaluate through `Service.EvaluateLifecycle` or the example server
 Run the policy locally:
 
 ```sh
-go run ./cmd/condition validate --name my-policy ./decision.bcl
-go run ./cmd/condition publish --name my-policy --version 1 ./decision.bcl
-go run ./cmd/condition evaluate my-policy --decision payment_risk_detection --input ./input.json
+go run ./cmd/rules validate --name my-policy ./decision.bcl
+go run ./cmd/rules publish --name my-policy --version 1 ./decision.bcl
+go run ./cmd/rules evaluate my-policy --decision payment_risk_detection --input ./input.json
 ```
 
 For lifecycle policies, use the lifecycle endpoint or service API:

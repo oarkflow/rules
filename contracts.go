@@ -225,6 +225,7 @@ func standardFactContracts(program *bcl.DecisionProgram) ([]StandardFactContract
 	allowedFacts := stringSet([]string{"request", "response", "principal", "route", "tenant", "resource", "risk", "state"})
 	for _, block := range blocks {
 		contract := StandardFactContract{ID: strings.TrimSpace(stringAny(block["id"])), Facts: map[string]string{}, Metadata: metadataFromChildBlocks(block["body"])}
+		contract.Strict = boolAny(bodyMap(block["body"])["strict"])
 		if contract.ID == "" {
 			diags = append(diags, bcl.Diagnostic{Severity: "error", Message: "standard_facts is missing id"})
 			continue

@@ -550,6 +550,46 @@ curl -H 'X-Roles: condition-admin' -H 'Content-Type: application/json' \
 - `examples/request-lifecycle`: compact lifecycle observability example.
 - `examples/http-auth-guard`: multi-file HTTP authorization and observability example.
 - `examples/complete-platform`: single-file reference that demonstrates the full feature set.
+- `examples/production-features`: signed publishing, semantic IR, idempotency, durable retries, deeply nested workflow branching, SLA timeouts, stateful scenarios, and OpenAPI route import/export.
+
+## Deeply Nested Conditional Workflows
+
+Workflow rules accept nested `all`, `any`, and `not` condition trees and arbitrary fact paths. Branches may declare `priority`; the highest matching priority wins. Equal-priority matches are rejected as ambiguous, while `default true` declares an explicit fallback.
+
+```bcl
+workflow "review" {
+  start "intake"
+  stage "intake" {
+    sla "15m"
+    on_timeout "expired"
+
+    rule "critical" {
+      priority 100
+      when {
+        all {
+          case.risk == "high"
+          any {
+            case.context.region == "restricted"
+            case.context.score >= 90
+          }
+          not { case.flags.suppressed == true }
+        }
+      }
+      next_stage "senior"
+    }
+
+    rule "fallback" {
+      default true
+      next_stage "manual"
+    }
+  }
+  stage "senior" { role "incident-manager" }
+  stage "manual" { role "analyst" }
+  stage "expired" { role "operations-manager" }
+}
+```
+
+Publish validation checks duplicate stages and transitions, invalid expressions, missing start/target/timeout stages, and runtime branch ambiguity. `TickWorkflows` advances expired stages using the injected runtime clock.
 
 ## VSCode Extension
 
