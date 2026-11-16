@@ -1,0 +1,353 @@
+bcl { version "1.0" strict true }
+
+version "1"
+environment "example"
+metadata { owner "business-operations" domain "procurement-and-controls" }
+
+policy_package "business_operations" {
+  owner "business-operations"
+  domain "procurement-and-controls"
+  version "1.0.0"
+  capabilities ["decisions", "actions", "state", "workflow"]
+  actions ["purchase_approved", "purchase_review", "purchase_rejected", "expense_approved", "expense_review", "expense_rejected", "vendor_approved", "vendor_review", "vendor_blocked", "notify", "escalate"]
+  state true
+  external false
+}
+
+reason_code_catalog "business_operations" {
+  code "VENDOR_PROHIBITED" { description "Vendor is sanctioned or fails minimum controls" }
+  code "PURCHASE_APPROVED" { description "Purchase is within delegated authority" }
+  code "PURCHASE_REVIEW" { description "Purchase requires approval or evidence" }
+  code "EXPENSE_APPROVED" { description "Expense meets reimbursement policy" }
+  code "EXPENSE_REVIEW" { description "Expense requires a receipt or manager review" }
+  code "EXPENSE_PROHIBITED" { description "Expense is outside reimbursable policy" }
+  code "VENDOR_APPROVED" { description "Vendor onboarding controls are complete" }
+  code "VENDOR_EVIDENCE" { description "Vendor onboarding evidence is incomplete" }
+}
+
+action_catalog "business_operations" {
+  action "purchase_approved" { sink "event" severity "low" }
+  action "purchase_review" { sink "event" severity "medium" }
+  action "purchase_rejected" { sink "event" severity "high" }
+  action "expense_approved" { sink "event" severity "low" }
+  action "expense_review" { sink "event" severity "medium" }
+  action "expense_rejected" { sink "event" severity "high" }
+  action "vendor_approved" { sink "event" severity "low" }
+  action "vendor_review" { sink "event" severity "medium" }
+  action "vendor_blocked" { sink "event" severity "critical" }
+  action "notify" { sink "event" severity "high" retries 3 }
+  action "escalate" { sink "event" severity "critical" retries 3 }
+}
+
+output_contract "business_outcomes" {
+  actions ["purchase_approved", "purchase_review", "purchase_rejected", "expense_approved", "expense_review", "expense_rejected", "vendor_approved", "vendor_review", "vendor_blocked", "notify", "escalate"]
+  severities ["low", "medium", "high", "critical"]
+}
+
+decision_schema "purchase_approval" {
+  effects [allow, deny, require_review]
+  default require_review
+  strategy first_match
+}
+
+decision_table "purchase_approval" {
+  contract "business_outcomes"
+  default require_review
+  hit_policy first
+
+  row "reject-prohibited-vendor" {
+    priority 100
+    when {
+      any {
+        vendor.sanctioned == true
+        vendor.active == false
+        vendor.security_rating < 40
+      }
+    }
+    then { outcome { decision deny reason "vendor does not meet procurement controls" attributes { action "purchase_rejected" route "reject" } metadata { severity "critical" } } obligation open_vendor_risk_case { team "third-party-risk" } }
+    reason "vendor does not meet procurement controls"
+    reason_code "VENDOR_PROHIBITED"
+  }
+
+  row "review-high-value-sensitive-or-over-budget" {
+    priority 80
+    when {
+      any {
+        purchase.amount_usd > 25000
+        purchase.sensitive_data == true
+        requester.budget_remaining_usd < purchase.amount_usd
+      }
+    }
+    then { outcome { decision require_review reason "purchase requires delegated approval" attributes { action "purchase_review" route "approval_workflow" } metadata { severity "medium" } } advice collect_approvals { levels "manager,finance,security" } }
+    reason "purchase requires delegated approval"
+    reason_code "PURCHASE_REVIEW"
+  }
+
+  row "approve-delegated-purchase" {
+    priority 20
+    when {
+      all {
+        vendor.approved == true
+        purchase.amount_usd <= 5000
+        requester.budget_remaining_usd >= purchase.amount_usd
+      }
+    }
+    then { outcome { decision allow reason "purchase is within delegated authority" attributes { action "purchase_approved" route "issue_purchase_order" } metadata { severity "low" } } }
+    reason "purchase is within delegated authority"
+    reason_code "PURCHASE_APPROVED"
+  }
+}
+
+decision_schema "expense_compliance" {
+  effects [allow, deny, require_review]
+  default require_review
+  strategy first_match
+}
+
+decision_table "expense_compliance" {
+  contract "business_outcomes"
+  default require_review
+  hit_policy first
+
+  row "reject-prohibited-expense" {
+    priority 100
+    when {
+      any {
+        expense.category == "gift_card"
+        expense.category == "personal"
+        expense.policy_exception == true
+      }
+    }
+    then { outcome { decision deny reason "expense is not reimbursable" attributes { action "expense_rejected" route "reject_claim" } metadata { severity "high" } } }
+    reason "expense is not reimbursable"
+    reason_code "EXPENSE_PROHIBITED"
+  }
+
+  row "review-large-or-missing-receipt" {
+    priority 70
+    when {
+      any {
+        expense.amount_usd > 1000
+        expense.receipt_present == false
+      }
+    }
+    then { outcome { decision require_review reason "expense evidence or manager approval is required" attributes { action "expense_review" route "expense_review" } metadata { severity "medium" } } advice request_receipt_or_approval { owner "manager" } }
+    reason "expense evidence or manager approval is required"
+    reason_code "EXPENSE_REVIEW"
+  }
+
+  row "approve-standard-expense" {
+    priority 10
+    when {
+      all {
+        expense.amount_usd <= 1000
+        expense.receipt_present == true
+      }
+    }
+    then { outcome { decision allow reason "expense meets reimbursement policy" attributes { action "expense_approved" route "reimburse" } metadata { severity "low" } } }
+    reason "expense meets reimbursement policy"
+    reason_code "EXPENSE_APPROVED"
+  }
+}
+
+decision_schema "vendor_onboarding" {
+  effects [allow, deny, require_review]
+  default require_review
+  strategy first_match
+}
+
+decision_table "vendor_onboarding" {
+  contract "business_outcomes"
+  default require_review
+  hit_policy first
+
+  row "deny-sanctioned-vendor" {
+    priority 100
+    when { vendor.sanctioned == true }
+    then { outcome { decision deny reason "sanctioned vendor cannot be onboarded" attributes { action "vendor_blocked" route "block" } metadata { severity "critical" } } obligation open_vendor_risk_case { team "third-party-risk" } }
+    reason "sanctioned vendor cannot be onboarded"
+    reason_code "VENDOR_PROHIBITED"
+  }
+
+  row "review-incomplete-dossier" {
+    priority 70
+    when {
+      any {
+        vendor.tax_form_received == false
+        vendor.security_review_complete == false
+        vendor.contract_signed == false
+      }
+    }
+    then { outcome { decision require_review reason "vendor dossier is incomplete" attributes { action "vendor_review" route "collect_evidence" } metadata { severity "medium" } } advice collect_vendor_evidence { owner "vendor-operations" } }
+    reason "vendor dossier is incomplete"
+    reason_code "VENDOR_EVIDENCE"
+  }
+
+  row "approve-complete-vendor" {
+    priority 10
+    when {
+      all {
+        vendor.tax_form_received == true
+        vendor.security_review_complete == true
+        vendor.contract_signed == true
+        vendor.security_rating >= 70
+      }
+    }
+    then { outcome { decision allow reason "vendor onboarding controls are complete" attributes { action "vendor_approved" route "activate_vendor" } metadata { severity "low" } } }
+    reason "vendor onboarding controls are complete"
+    reason_code "VENDOR_APPROVED"
+  }
+}
+
+chain "vendor_risk_watch" {
+  entity "vendor.id"
+  watch "vendor_compliance_failures" {
+    event "vendor_compliance_failure"
+    window "30d"
+    decay "30d"
+    reset "vendor_remediated"
+    step "notify-owner" { threshold 2 action "notify" severity "high" ttl "7d" }
+    step "escalate-third-party-risk" { threshold 4 action "escalate" severity "critical" ttl "30d" }
+  }
+}
+
+workflow "purchase_approval" {
+  start "intake"
+  stage "intake" {
+    queue "procurement"
+    sla "1d"
+    on_timeout "expired"
+    rule "security-review" {
+      priority 100
+      when {
+        all {
+          case.sensitive_data == true
+          case.amount_usd > 5000
+        }
+      }
+      next_stage "security"
+      event "security_review_required"
+    }
+    rule "finance-review" {
+      priority 80
+      when { case.amount_usd > 25000 }
+      next_stage "finance"
+      event "finance_review_required"
+    }
+    rule "manager-review" {
+      priority 50
+      when { case.amount_usd > 5000 }
+      next_stage "manager"
+      event "manager_review_required"
+    }
+    rule "delegated-approval" {
+      default true
+      next_stage "approved"
+      event "purchase_approved"
+    }
+  }
+  stage "manager" { role "people-manager" sla "2d" on_timeout "expired" }
+  stage "finance" { role "finance-approver" sla "2d" on_timeout "expired" }
+  stage "security" { role "security-reviewer" sla "2d" on_timeout "expired" }
+  stage "approved" { role "procurement-system" }
+  stage "expired" { role "procurement-operations" }
+}
+
+test "small approved purchase" {
+  decision "purchase_approval"
+  input {
+    vendor.sanctioned false
+    vendor.active true
+    vendor.security_rating 90
+    vendor.approved true
+    purchase.amount_usd 3200
+    purchase.sensitive_data false
+    requester.budget_remaining_usd 12000
+  }
+  expect { effect "allow" reason_code "PURCHASE_APPROVED" }
+}
+
+test "high value purchase reviewed" {
+  decision "purchase_approval"
+  input {
+    vendor.sanctioned false
+    vendor.active true
+    vendor.security_rating 90
+    vendor.approved true
+    purchase.amount_usd 72000
+    purchase.sensitive_data true
+    requester.budget_remaining_usd 90000
+  }
+  expect { effect "require_review" reason_code "PURCHASE_REVIEW" }
+}
+
+test "sanctioned vendor rejected" {
+  decision "purchase_approval"
+  input {
+    vendor.sanctioned true
+    vendor.active true
+    vendor.security_rating 90
+    vendor.approved false
+    purchase.amount_usd 500
+    purchase.sensitive_data false
+    requester.budget_remaining_usd 2000
+  }
+  expect { effect "deny" reason_code "VENDOR_PROHIBITED" }
+}
+
+test "missing receipt reviewed" {
+  decision "expense_compliance"
+  input {
+    expense.category "travel"
+    expense.amount_usd 85
+    expense.receipt_present false
+    expense.policy_exception false
+  }
+  expect { effect "require_review" reason_code "EXPENSE_REVIEW" }
+}
+
+test "documented standard expense approved" {
+  decision "expense_compliance"
+  input {
+    expense.category "travel"
+    expense.amount_usd 85
+    expense.receipt_present true
+    expense.policy_exception false
+  }
+  expect { effect "allow" reason_code "EXPENSE_APPROVED" }
+}
+
+test "prohibited expense rejected" {
+  decision "expense_compliance"
+  input {
+    expense.category "gift_card"
+    expense.amount_usd 40
+    expense.receipt_present true
+    expense.policy_exception false
+  }
+  expect { effect "deny" reason_code "EXPENSE_PROHIBITED" }
+}
+
+test "complete vendor dossier approved" {
+  decision "vendor_onboarding"
+  input {
+    vendor.sanctioned false
+    vendor.tax_form_received true
+    vendor.security_review_complete true
+    vendor.contract_signed true
+    vendor.security_rating 92
+  }
+  expect { effect "allow" reason_code "VENDOR_APPROVED" }
+}
+
+test "incomplete vendor dossier reviewed" {
+  decision "vendor_onboarding"
+  input {
+    vendor.sanctioned false
+    vendor.tax_form_received true
+    vendor.security_review_complete false
+    vendor.contract_signed false
+    vendor.security_rating 92
+  }
+  expect { effect "require_review" reason_code "VENDOR_EVIDENCE" }
+}

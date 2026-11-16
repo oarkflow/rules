@@ -83,7 +83,8 @@ Production server configuration examples live in `production-server`. They are n
 * `manufacturing-iot`: sensor thresholds, machine shutdown, maintenance review, and production continuity.
 * `hr-leave-approval`: leave balances, staffing coverage, blackout periods, and manager review.
 * `education-scholarship`: student eligibility, committee review, and merit/need scholarship awards.
-* `data-governance`: legal hold, data residency, PII masking, and governed warehouse access.
+* `business-operations`: procurement approvals, expense reimbursement, vendor onboarding, approval workflows, and stateful vendor-risk escalation.
+* `data-governance`: purpose-based warehouse access, PII masking, residency, exports, legal holds, retention, privacy workflows, and stateful export-anomaly escalation.
 * `content-moderation`: classifier scores, copyright matches, creator reputation, and publish/remove routing.
 * `loan-eligibility`: credit policy, underwriting review, collateral checks, and loan approval.
 * `cybersecurity-session-risk`: impossible travel, device trust, Tor signals, MFA step-up, and session termination.

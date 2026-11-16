@@ -5,8 +5,6 @@ import (
 	_ "embed"
 	"fmt"
 	"log"
-	"sort"
-	"strings"
 
 	"examples/internal/examplebase"
 
@@ -17,17 +15,14 @@ import (
 //go:embed decision.bcl
 var policySource string
 
-type Column struct {
-	Name string
-	Tags []string
-}
+const definition = "data-governance"
 
 type Dataset struct {
 	ID             string
 	Region         string
+	Classification string
 	LegalHold      bool
-	Columns        []Column
-	RetentionYears int
+	ContainsPII    bool
 }
 
 type DataUser struct {
@@ -39,106 +34,113 @@ type DataUser struct {
 
 type QueryRequest struct {
 	ID      string
-	SQL     string
 	Columns []string
 	Export  bool
 }
 
-type DataAccessCase struct {
+type AccessCase struct {
 	Name    string
 	Dataset Dataset
 	User    DataUser
-	Request QueryRequest
-}
-
-type GovernanceDecisionInput struct {
-	ContainsPII     bool
-	MaskingRequired bool
-	RegionAllowed   bool
-	MaskColumns     []string
-	Facts           map[string]any
+	Query   QueryRequest
 }
 
 func main() {
 	ctx := context.Background()
-	svc := rules.NewService(storage.NewMemoryStore(), rules.Config{Environment: "example", RequireTests: true})
-	if _, err := svc.Publish(ctx, rules.PublishRequest{Name: "data-governance", Version: "1", Source: policySource, RunTests: true, BaseDir: examplebase.Dir()}); err != nil {
+	store := storage.NewMemoryStore()
+	service := rules.NewService(store, rules.Config{Environment: "example", RequireTests: true})
+	if _, err := service.Publish(ctx, rules.PublishRequest{
+		Name: definition, Version: "1", Source: policySource, BaseDir: examplebase.Dir(), RunTests: true,
+	}); err != nil {
 		log.Fatal(err)
 	}
 
-	for _, c := range queryLog() {
-		governance := inspectQuery(c)
-		resp, err := svc.Evaluate(ctx, "data-governance", rules.EvaluateRequest{Decision: "data_access", Input: governance.Facts})
+	customers := Dataset{ID: "customers", Region: "US", Classification: "restricted", ContainsPII: true}
+	claims := Dataset{ID: "claims", Region: "US", Classification: "confidential", LegalHold: true, ContainsPII: true}
+	cases := []AccessCase{
+		{Name: "restricted caseworker", Dataset: customers, User: DataUser{ID: "user-1", Clearance: "restricted", Region: "US", Purpose: "casework"}, Query: QueryRequest{ID: "query-1", Columns: []string{"email", "status"}}},
+		{Name: "analytics PII access", Dataset: customers, User: DataUser{ID: "user-2", Clearance: "standard", Region: "US", Purpose: "analytics"}, Query: QueryRequest{ID: "query-2", Columns: []string{"email", "phone"}, Export: true}},
+		{Name: "legal hold dataset", Dataset: claims, User: DataUser{ID: "user-3", Clearance: "restricted", Region: "US", Purpose: "casework"}, Query: QueryRequest{ID: "query-3", Columns: []string{"ssn"}}},
+		{Name: "wrong region", Dataset: customers, User: DataUser{ID: "user-4", Clearance: "restricted", Region: "EU", Purpose: "casework"}, Query: QueryRequest{ID: "query-4", Columns: []string{"status"}}},
+	}
+
+	for _, accessCase := range cases {
+		response, err := service.Evaluate(ctx, definition, rules.EvaluateRequest{Decision: "data_access", Input: accessFacts(accessCase)})
 		if err != nil {
 			log.Fatal(err)
 		}
-		decision := resp.Report.Decision
-		fmt.Printf("\n%s %s\n", c.Request.ID, c.Name)
-		fmt.Printf("  query: columns=%v pii=%v mask=%v region_ok=%v\n", c.Request.Columns, governance.ContainsPII, governance.MaskColumns, governance.RegionAllowed)
-		fmt.Printf("  decision: effect=%s transform=%v reason=%s\n", decision.Effect, decision.Attributes["transform"], decision.ReasonCode)
-		enforceDataPolicy(c, governance, decision.Effect)
+		decision := response.Report.Decision
+		fmt.Printf("\naccess %s (%s/%s): effect=%s action=%v transform=%v reason=%s\n",
+			accessCase.Query.ID, accessCase.Name, accessCase.Dataset.ID,
+			decision.Effect, decision.Attributes["action"], decision.Attributes["transform"], decision.ReasonCode)
+		fmt.Printf("  requested columns=%v region=%s purpose=%s\n", accessCase.Query.Columns, accessCase.User.Region, accessCase.User.Purpose)
+		applyAccessOutcome(accessCase, decision.Effect, decision.Attributes["transform"])
 	}
-}
 
-func queryLog() []DataAccessCase {
-	customers := Dataset{ID: "customers", Region: "US", Columns: []Column{{"email", []string{"pii"}}, {"phone", []string{"pii"}}, {"status", []string{"business"}}}, RetentionYears: 7}
-	claims := Dataset{ID: "claims", Region: "US", LegalHold: true, Columns: []Column{{"claim_id", nil}, {"ssn", []string{"pii", "restricted"}}}}
-	return []DataAccessCase{
-		{Name: "restricted caseworker", Dataset: customers, User: DataUser{ID: "u-1", Clearance: "restricted", Region: "US", Purpose: "casework"}, Request: QueryRequest{ID: "dr-1", SQL: "select email,phone,status from customers", Columns: []string{"email", "phone", "status"}}},
-		{Name: "analytics export", Dataset: customers, User: DataUser{ID: "u-2", Clearance: "standard", Region: "US", Purpose: "analytics"}, Request: QueryRequest{ID: "dr-2", SQL: "select email,status from customers", Columns: []string{"email", "status"}, Export: true}},
-		{Name: "legal hold dataset", Dataset: claims, User: DataUser{ID: "u-3", Clearance: "restricted", Region: "US", Purpose: "casework"}, Request: QueryRequest{ID: "dr-3", SQL: "select ssn from claims", Columns: []string{"ssn"}}},
-	}
-}
-
-func inspectQuery(c DataAccessCase) GovernanceDecisionInput {
-	mask := selectedPIIColumns(c.Dataset, c.Request.Columns)
-	containsPII := len(mask) > 0
-	maskingRequired := containsPII && (c.User.Clearance != "restricted" || c.User.Purpose == "analytics" || c.Request.Export)
-	regionAllowed := c.User.Region == c.Dataset.Region
-	sort.Strings(mask)
-	return GovernanceDecisionInput{
-		ContainsPII:     containsPII,
-		MaskingRequired: maskingRequired,
-		RegionAllowed:   regionAllowed,
-		MaskColumns:     mask,
-		Facts: map[string]any{
-			"dataset": map[string]any{"id": c.Dataset.ID, "contains_pii": containsPII, "legal_hold": c.Dataset.LegalHold},
-			"user":    map[string]any{"id": c.User.ID, "clearance": c.User.Clearance},
-			"query":   map[string]any{"id": c.Request.ID, "purpose": c.User.Purpose, "region_allowed": regionAllowed, "masking_required": maskingRequired},
+	export, err := service.Evaluate(ctx, definition, rules.EvaluateRequest{
+		Decision: "data_export",
+		Input: map[string]any{
+			"dataset": map[string]any{"contains_pii": true, "legal_hold": false, "classification": "restricted", "region": "US"},
+			"user":    map[string]any{"clearance": "restricted"},
+			"export":  map[string]any{"destination_region": "US", "row_count": 25000, "external": true},
 		},
+	})
+	if err != nil {
+		log.Fatal(err)
+	}
+	fmt.Printf("\nexport review: effect=%s action=%v route=%v reason=%s\n", export.Report.Decision.Effect, export.Report.Decision.Attributes["action"], export.Report.Decision.Attributes["route"], export.Report.Decision.ReasonCode)
+
+	retention, err := service.Evaluate(ctx, definition, rules.EvaluateRequest{
+		Decision: "retention_disposition",
+		Input: map[string]any{
+			"dataset":   map[string]any{"id": "claims", "legal_hold": false},
+			"retention": map[string]any{"age_days": 900, "minimum_days": 365, "deletion_approved": true},
+		},
+	})
+	if err != nil {
+		log.Fatal(err)
+	}
+	fmt.Printf("retention review: effect=%s action=%v transform=%v reason=%s\n", retention.Report.Decision.Effect, retention.Report.Decision.Attributes["action"], retention.Report.Decision.Attributes["transform"], retention.Report.Decision.ReasonCode)
+
+	workflow, err := service.StartWorkflow(ctx, definition, "data_access_review", map[string]any{
+		"case": map[string]any{"id": "query-2", "classification": "restricted", "contains_pii": true, "external": true, "legal_hold": false},
+	})
+	if err != nil {
+		log.Fatal(err)
+	}
+	workflow, err = service.AdvanceWorkflow(ctx, workflow.ID, nil)
+	if err != nil {
+		log.Fatal(err)
+	}
+	fmt.Printf("workflow %s: stage=%s status=%s events=%v\n", workflow.ID, workflow.Stage, workflow.Status, workflow.Events)
+
+	for i := 1; i <= 3; i++ {
+		result, err := service.EvaluateChain(ctx, definition, "export_anomaly_watch", rules.ChainEvaluateRequest{
+			Event: "sensitive_export_review", EventID: fmt.Sprintf("export-review-%d", i), EntityKey: "user-2",
+			Input: map[string]any{"user": map[string]any{"id": "user-2"}},
+		})
+		if err != nil {
+			log.Fatal(err)
+		}
+		fmt.Printf("export review event %d: action=%s severity=%s\n", i, result.Evaluation.FinalAction, result.Evaluation.FinalSeverity)
 	}
 }
 
-func enforceDataPolicy(c DataAccessCase, g GovernanceDecisionInput, effect string) {
+func accessFacts(c AccessCase) map[string]any {
+	return map[string]any{
+		"dataset": map[string]any{"id": c.Dataset.ID, "region": c.Dataset.Region, "classification": c.Dataset.Classification, "contains_pii": c.Dataset.ContainsPII, "legal_hold": c.Dataset.LegalHold},
+		"user":    map[string]any{"id": c.User.ID, "clearance": c.User.Clearance, "region": c.User.Region},
+		"query":   map[string]any{"id": c.Query.ID, "purpose": c.User.Purpose, "export": c.Query.Export},
+	}
+}
+
+func applyAccessOutcome(c AccessCase, effect string, transform any) {
 	switch effect {
 	case "allow":
-		fmt.Printf("  issue short-lived warehouse token with row filter purpose=%s\n", c.User.Purpose)
+		fmt.Printf("  host action: issue scoped warehouse credentials for purpose=%s\n", c.User.Purpose)
 	case "require_review":
-		fmt.Printf("  rewrite SQL with masking for columns: %s\n", strings.Join(g.MaskColumns, ","))
+		fmt.Printf("  host action: route to privacy review; requested transform=%v\n", transform)
 	default:
-		fmt.Printf("  block query and preserve SQL for audit: %q\n", c.Request.SQL)
+		fmt.Printf("  host action: reject query and append denial facts to the audit record\n")
 	}
-}
-
-func selectedPIIColumns(dataset Dataset, requested []string) []string {
-	requestedSet := map[string]bool{}
-	for _, col := range requested {
-		requestedSet[col] = true
-	}
-	var pii []string
-	for _, col := range dataset.Columns {
-		if requestedSet[col.Name] && hasTag(col.Tags, "pii") {
-			pii = append(pii, col.Name)
-		}
-	}
-	return pii
-}
-
-func hasTag(tags []string, tag string) bool {
-	for _, item := range tags {
-		if item == tag {
-			return true
-		}
-	}
-	return false
 }

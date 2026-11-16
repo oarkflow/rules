@@ -2,12 +2,64 @@ bcl { version "1.0" strict true }
 
 version "1"
 environment "example"
-metadata { owner "data-platform" domain "governance" }
+metadata { owner "data-platform" domain "data-governance" }
 
-reason_code_catalog "data_access" {
-  code "RESIDENCY_BLOCK" { description "Data access violates residency or legal hold policy" }
-  code "MASK_PII" { description "Access is allowed only with protected fields masked" }
-  code "FULL_ACCESS" { description "Access satisfies data governance policy" }
+policy_package "data_governance" {
+  owner "data-platform"
+  domain "data-governance"
+  version "1.0.0"
+  capabilities ["decisions", "actions", "routes", "state", "workflow"]
+  routes ["warehouse"]
+  actions ["data_access_granted", "data_access_denied", "data_access_review", "data_masked", "export_approved", "export_review", "export_denied", "retention_deletion_approved", "retention_review", "legal_hold_preserved", "notify", "escalate"]
+  state true
+  external false
+}
+
+reason_code_catalog "data_governance" {
+  code "LEGAL_HOLD" { description "Legal hold prevents data access or deletion" }
+  code "RESIDENCY_BLOCK" { description "The user or export destination violates data residency" }
+  code "PURPOSE_BLOCK" { description "The requested purpose is not permitted for this dataset" }
+  code "MASK_PII" { description "Access requires masking or privacy review" }
+  code "FULL_ACCESS" { description "Access satisfies dataset governance policy" }
+  code "EXPORT_REVIEW" { description "Export size or sensitivity requires approval" }
+  code "RETENTION_ACTIVE" { description "The minimum retention period has not elapsed" }
+  code "RETENTION_DELETE" { description "The record is eligible for deletion under retention policy" }
+}
+
+action_catalog "data_governance" {
+  action "data_access_granted" { sink "event" severity "low" }
+  action "data_access_denied" { sink "event" severity "high" }
+  action "data_access_review" { sink "event" severity "medium" }
+  action "data_masked" { sink "event" severity "medium" }
+  action "export_approved" { sink "event" severity "low" }
+  action "export_review" { sink "event" severity "high" }
+  action "export_denied" { sink "event" severity "critical" }
+  action "retention_deletion_approved" { sink "event" severity "medium" }
+  action "retention_review" { sink "event" severity "medium" }
+  action "legal_hold_preserved" { sink "event" severity "critical" }
+  action "notify" { sink "event" severity "high" retries 3 }
+  action "escalate" { sink "event" severity "critical" retries 3 }
+}
+
+output_contract "governance_outcomes" {
+  actions ["data_access_granted", "data_access_denied", "data_access_review", "data_masked", "export_approved", "export_review", "export_denied", "retention_deletion_approved", "retention_review", "legal_hold_preserved", "notify", "escalate"]
+  severities ["low", "medium", "high", "critical"]
+}
+
+standard_facts "governance_facts" {
+  strict true
+  fact "dataset"
+  fact "user"
+  fact "query"
+  fact "export"
+  fact "retention"
+  fact "case"
+}
+
+routes "warehouse" {
+  route "query" { method "POST" pattern "/warehouse/query" metadata { classification "data-access" } }
+  route "export" { method "POST" pattern "/warehouse/export" metadata { classification "data-export" } }
+  route "retention" { method "POST" pattern "/warehouse/retention" metadata { classification "retention" } }
 }
 
 decision_schema "data_access" {
@@ -17,58 +69,319 @@ decision_schema "data_access" {
 }
 
 decision_table "data_access" {
+  contract "governance_outcomes"
   default require_review
   hit_policy first
 
-  row "deny-residency-or-legal-hold" {
+  row "deny-legal-hold" {
+    priority 120
+    when { dataset.legal_hold == true }
+    then { outcome { decision deny reason "dataset is under legal hold" attributes { action "data_access_denied" route "deny" transform "none" } metadata { severity "critical" } } obligation audit_access_denial { category "legal_hold" } }
+    reason "dataset is under legal hold"
+    reason_code "LEGAL_HOLD"
+  }
+
+  row "deny-residency" {
+    priority 110
+    when { user.region != dataset.region }
+    then { outcome { decision deny reason "access violates data residency" attributes { action "data_access_denied" route "deny" transform "none" } metadata { severity "critical" } } }
+    reason "access violates data residency"
+    reason_code "RESIDENCY_BLOCK"
+  }
+
+  row "deny-prohibited-purpose" {
     priority 100
     when {
       any {
-        dataset.legal_hold == true
-        query.region_allowed == false
+        all {
+          dataset.classification == "restricted"
+          query.purpose == "marketing"
+        }
+        all {
+          dataset.classification == "confidential"
+          query.purpose == "training"
+        }
       }
     }
-    then { outcome { decision deny reason "data access is blocked by governance policy" attributes { route "deny" transform "none" } metadata { severity "critical" } } obligation audit_access_denial { category "data_governance" } }
-    reason "data access is blocked by governance policy"
-    reason_code "RESIDENCY_BLOCK"
-    tags ["residency", "legal-hold"]
+    then { outcome { decision deny reason "requested purpose is not permitted" attributes { action "data_access_denied" route "deny" transform "none" } metadata { severity "high" } } }
+    reason "requested purpose is not permitted"
+    reason_code "PURPOSE_BLOCK"
   }
 
   row "review-or-mask-pii" {
-    priority 70
-    when { query.masking_required == true }
-    then { outcome { decision require_review reason "PII must be masked or reviewed" attributes { route "masking-proxy" transform "mask-pii" } metadata { severity "medium" } } advice apply_masking_policy { columns "email,phone,ssn" } }
-    reason "PII must be masked or reviewed"
+    priority 80
+    when {
+      all {
+        dataset.contains_pii == true
+        any {
+          user.clearance != "restricted"
+          query.purpose == "analytics"
+          query.export == true
+        }
+      }
+    }
+    then { outcome { decision require_review reason "PII access requires masking or privacy review" attributes { action "data_access_review" route "privacy_proxy" transform "mask-pii" } metadata { severity "medium" } } advice apply_masking_policy { fields "email,phone,ssn,address" } }
+    reason "PII access requires masking or privacy review"
     reason_code "MASK_PII"
-    tags ["pii", "masking"]
   }
 
-  row "allow-governed-access" {
+  row "allow-restricted-casework" {
     priority 30
     when {
       all {
-        query.region_allowed == true
+        user.region == dataset.region
         dataset.legal_hold == false
         user.clearance == "restricted"
         query.purpose == "casework"
+        query.export == false
       }
     }
-    then { outcome { decision allow reason "governed full access approved" attributes { route "warehouse" transform "none" } metadata { severity "low" } } }
-    reason "governed full access approved"
+    then { outcome { decision allow reason "governed casework access approved" attributes { action "data_access_granted" route "warehouse" transform "none" } metadata { severity "low" } } }
+    reason "governed casework access approved"
     reason_code "FULL_ACCESS"
-    tags ["data-access"]
   }
 }
 
-test "casework access" {
+decision_schema "data_export" {
+  effects [allow, deny, require_review]
+  default require_review
+  strategy first_match
+}
+
+decision_table "data_export" {
+  contract "governance_outcomes"
+  default require_review
+  hit_policy first
+
+  row "deny-cross-border-export" {
+    priority 120
+    when { export.destination_region != dataset.region }
+    then { outcome { decision deny reason "export destination violates residency" attributes { action "export_denied" route "deny" transform "none" } metadata { severity "critical" } } }
+    reason "export destination violates residency"
+    reason_code "RESIDENCY_BLOCK"
+  }
+
+  row "review-sensitive-or-bulk-export" {
+    priority 80
+    when {
+      any {
+        dataset.classification == "restricted"
+        export.row_count > 10000
+        dataset.contains_pii == true
+        export.external == true
+      }
+    }
+    then { outcome { decision require_review reason "sensitive or bulk export requires privacy approval" attributes { action "export_review" route "export_review" transform "mask-pii" } metadata { severity "high" } } advice require_export_approval { approvers "data-owner,privacy,security" } }
+    reason "sensitive or bulk export requires privacy approval"
+    reason_code "EXPORT_REVIEW"
+  }
+
+  row "approve-governed-export" {
+    priority 20
+    when {
+      all {
+        export.destination_region == dataset.region
+        export.external == false
+        dataset.legal_hold == false
+        export.row_count <= 10000
+        user.clearance == "restricted"
+      }
+    }
+    then { outcome { decision allow reason "export satisfies governance controls" attributes { action "export_approved" route "controlled_export" transform "audit" } metadata { severity "low" } } }
+    reason "export satisfies governance controls"
+    reason_code "FULL_ACCESS"
+  }
+}
+
+decision_schema "retention_disposition" {
+  effects [allow, deny, require_review]
+  default require_review
+  strategy first_match
+}
+
+decision_table "retention_disposition" {
+  contract "governance_outcomes"
+  default require_review
+  hit_policy first
+
+  row "preserve-legal-hold" {
+    priority 120
+    when { dataset.legal_hold == true }
+    then { outcome { decision deny reason "legal hold overrides retention deletion" attributes { action "legal_hold_preserved" route "preserve" transform "none" } metadata { severity "critical" } } obligation emit_hold_audit { category "retention" } }
+    reason "legal hold overrides retention deletion"
+    reason_code "LEGAL_HOLD"
+  }
+
+  row "retain-until-minimum-period" {
+    priority 80
+    when { retention.age_days < retention.minimum_days }
+    then { outcome { decision require_review reason "minimum retention period is still active" attributes { action "retention_review" route "retain" transform "none" } metadata { severity "medium" } } }
+    reason "minimum retention period is still active"
+    reason_code "RETENTION_ACTIVE"
+  }
+
+  row "delete-after-retention" {
+    priority 20
+    when {
+      all {
+        dataset.legal_hold == false
+        retention.age_days >= retention.minimum_days
+        retention.deletion_approved == true
+      }
+    }
+    then { outcome { decision allow reason "record is eligible for governed deletion" attributes { action "retention_deletion_approved" route "delete" transform "secure-delete" } metadata { severity "medium" } } obligation record_deletion_evidence { category "retention" } }
+    reason "record is eligible for governed deletion"
+    reason_code "RETENTION_DELETE"
+  }
+}
+
+chain "export_anomaly_watch" {
+  entity "user.id"
+  watch "repeated_export_reviews" {
+    event "sensitive_export_review"
+    window "1h"
+    decay "24h"
+    reset "export_training_completed"
+    step "notify-data-owner" { threshold 3 action "notify" severity "high" ttl "1h" }
+    step "escalate-export-pattern" { threshold 5 action "escalate" severity "critical" ttl "24h" }
+  }
+}
+
+workflow "data_access_review" {
+  start "intake"
+  stage "intake" {
+    queue "privacy-operations"
+    sla "4h"
+    on_timeout "expired"
+    rule "legal-hold-review" {
+      priority 120
+      when { case.legal_hold == true }
+      next_stage "legal"
+      event "legal_hold_review"
+    }
+    rule "restricted-data-review" {
+      priority 100
+      when {
+        all {
+          case.classification == "restricted"
+          case.external == true
+        }
+      }
+      next_stage "privacy_security"
+      event "privacy_security_review"
+    }
+    rule "data-owner-review" {
+      priority 70
+      when { case.contains_pii == true }
+      next_stage "data_owner"
+      event "data_owner_review"
+    }
+    rule "standard-request" {
+      default true
+      next_stage "approved"
+      event "standard_access_approved"
+    }
+  }
+  stage "legal" { role "legal-counsel" sla "1d" on_timeout "expired" }
+  stage "privacy_security" { role "privacy-security-reviewers" sla "8h" on_timeout "expired" }
+  stage "data_owner" { role "dataset-owner" sla "1d" on_timeout "expired" }
+  stage "approved" { role "data-governance-system" }
+  stage "expired" { role "privacy-operations-manager" }
+}
+
+test "restricted casework access allowed" {
   decision "data_access"
   input {
     dataset.contains_pii true
     dataset.legal_hold false
+    dataset.classification "restricted"
     user.clearance "restricted"
-    query.region_allowed true
     query.purpose "casework"
-    query.masking_required false
+    query.export false
+    user.region "US"
+    dataset.region "US"
   }
   expect { effect "allow" reason_code "FULL_ACCESS" }
+}
+
+test "legal hold denies access" {
+  decision "data_access"
+  input {
+    dataset.contains_pii false
+    dataset.legal_hold true
+    dataset.classification "confidential"
+    user.clearance "restricted"
+    query.purpose "casework"
+    query.export false
+    user.region "US"
+    dataset.region "US"
+  }
+  expect { effect "deny" reason_code "LEGAL_HOLD" }
+}
+
+test "analytics PII requires masking" {
+  decision "data_access"
+  input {
+    dataset.contains_pii true
+    dataset.legal_hold false
+    dataset.classification "confidential"
+    user.clearance "standard"
+    query.purpose "analytics"
+    query.export false
+    user.region "US"
+    dataset.region "US"
+  }
+  expect { effect "require_review" reason_code "MASK_PII" }
+}
+
+test "cross border export denied" {
+  decision "data_export"
+  input {
+    dataset.contains_pii false
+    dataset.legal_hold false
+    dataset.classification "internal"
+    user.clearance "restricted"
+    export.destination_region "EU"
+    export.row_count 500
+    export.external false
+    dataset.region "US"
+  }
+  expect { effect "deny" reason_code "RESIDENCY_BLOCK" }
+}
+
+test "bulk export requires review" {
+  decision "data_export"
+  input {
+    dataset.contains_pii false
+    dataset.legal_hold false
+    dataset.classification "internal"
+    user.clearance "restricted"
+    export.destination_region "US"
+    export.row_count 50000
+    export.external false
+    dataset.region "US"
+  }
+  expect { effect "require_review" reason_code "EXPORT_REVIEW" }
+}
+
+test "legal hold prevents deletion" {
+  decision "retention_disposition"
+  input {
+    dataset.legal_hold true
+    retention.age_days 900
+    retention.minimum_days 365
+    retention.deletion_approved true
+  }
+  expect { effect "deny" reason_code "LEGAL_HOLD" }
+}
+
+test "eligible record approved for deletion" {
+  decision "retention_disposition"
+  input {
+    dataset.legal_hold false
+    retention.age_days 900
+    retention.minimum_days 365
+    retention.deletion_approved true
+  }
+  expect { effect "allow" reason_code "RETENTION_DELETE" }
 }
