@@ -558,9 +558,9 @@ func stringMapFromAny(v any) map[string]string {
 	return out
 }
 
-func (s *Service) lifecycleActionsFromDecision(ctx context.Context, record storage.DefinitionRecord, lifecycleID, entityKey string, decision *bcl.DecisionResult, dryRun bool, input map[string]any) []LifecycleAction {
+func (s *Service) lifecycleActionsFromDecision(ctx context.Context, record storage.DefinitionRecord, lifecycleID, entityKey string, decision *bcl.DecisionResult, dryRun bool, input map[string]any) ([]LifecycleAction, error) {
 	if decision == nil {
-		return nil
+		return nil, nil
 	}
 	attrs := deepMergeMaps(lifecycleActionFactAttributes(input), cloneMap(decision.Attributes))
 	metadata := cloneMap(decision.Metadata)
@@ -570,12 +570,20 @@ func (s *Service) lifecycleActionsFromDecision(ctx context.Context, record stora
 		if event.Name == "" {
 			continue
 		}
-		actions = append(actions, s.lifecycleAction(ctx, record, lifecycleID, entityKey, event.Name, decision.ReasonCode, severity, event.Params, metadata, dryRun))
+		action, err := s.lifecycleAction(ctx, record, lifecycleID, entityKey, event.Name, decision.ReasonCode, severity, event.Params, metadata, dryRun)
+		if err != nil {
+			return actions, err
+		}
+		actions = append(actions, action)
 	}
 	if action := strings.TrimSpace(fmt.Sprint(attrs["action"])); action != "" && action != "<nil>" {
-		actions = append(actions, s.lifecycleAction(ctx, record, lifecycleID, entityKey, action, decision.ReasonCode, severity, attrs, metadata, dryRun))
+		lifecycleAction, err := s.lifecycleAction(ctx, record, lifecycleID, entityKey, action, decision.ReasonCode, severity, attrs, metadata, dryRun)
+		if err != nil {
+			return actions, err
+		}
+		actions = append(actions, lifecycleAction)
 	}
-	return actions
+	return actions, nil
 }
 
 func lifecycleActionFactAttributes(input map[string]any) map[string]any {
@@ -617,33 +625,78 @@ func lifecycleActionFactAttributes(input map[string]any) map[string]any {
 	return attrs
 }
 
-func (s *Service) lifecycleAction(ctx context.Context, record storage.DefinitionRecord, lifecycleID, entityKey, name, reasonCode, severity string, attrs, metadata map[string]any, dryRun bool) LifecycleAction {
+func (s *Service) lifecycleAction(ctx context.Context, record storage.DefinitionRecord, lifecycleID, entityKey, name, reasonCode, severity string, attrs, metadata map[string]any, dryRun bool) (LifecycleAction, error) {
 	action := LifecycleAction{Name: name, ReasonCode: reasonCode, Severity: severity, Attributes: cloneMap(attrs), Metadata: cloneMap(metadata)}
 	action = actionWithCatalogDefaults(record.Program, action)
 	if sink := strings.TrimSpace(fmt.Sprint(attrs["sink"])); sink != "" && sink != "<nil>" {
 		action.Sink = sink
 	}
 	event := s.newChainEvent(record, lifecycleID, "", entityKey, name, "", reasonCode, action.Severity, attrs, metadata, nil)
-	_ = s.store.AppendChainEvent(ctx, event)
+	if err := s.store.AppendChainEvent(ctx, event); err != nil {
+		return action, fmt.Errorf("persist lifecycle action event %q: %w", name, err)
+	}
+	return s.persistAndDispatchLifecycleAction(ctx, record, lifecycleID, entityKey, action, dryRun)
+}
+
+// persistAndDispatchLifecycleAction records a retryable delivery before calling
+// external handlers. A process crash after dispatch can still cause a retry,
+// so handlers should deduplicate on LifecycleAction.DeliveryID.
+func (s *Service) persistAndDispatchLifecycleAction(ctx context.Context, record storage.DefinitionRecord, lifecycleID, entityKey string, action LifecycleAction, dryRun bool) (LifecycleAction, error) {
+	delivery := s.actionDeliveryRecord(record, lifecycleID, entityKey, action)
+	action.DeliveryID = delivery.ID
+	handler, _ := s.actionHandler(action)
+	external := !dryRun && (handler != nil || action.Sink != "" && action.Sink != "event" && action.Sink != "log")
+	var unlock func()
+	if external {
+		var err error
+		unlock, err = s.lockStoredEntity(ctx, "action|"+delivery.ID)
+		if err != nil {
+			return action, err
+		}
+		defer unlock()
+		next := s.now()
+		delivery.Status = "retry_scheduled"
+		delivery.Attempts = 0
+		delivery.NextAttempt = &next
+	} else if dryRun {
+		delivery.Status = "dry_run"
+	} else if delivery.Status == "" {
+		delivery.Status = "event_persisted"
+	}
+	if err := s.store.SaveActionDelivery(ctx, delivery); err != nil {
+		return action, fmt.Errorf("persist lifecycle action delivery %q: %w", action.Name, err)
+	}
+
 	handled, result := false, &ActionResult{Handled: false, Status: "dry_run"}
 	if !dryRun {
 		handled, result = s.dispatchLifecycleAction(ctx, record, action)
 	}
 	action.Handled = handled
 	action.Result = result
-	delivery := s.actionDeliveryRecord(record, lifecycleID, entityKey, action)
-	if delivery.Status == "" {
-		delivery.Status = "event_persisted"
-	}
-	if err := s.store.SaveActionDelivery(ctx, delivery); err == nil {
-		action.DeliveryID = delivery.ID
-	}
-	if incident, ok := s.incidentFromAction(ctx, record, lifecycleID, entityKey, action); ok {
-		if err := s.store.UpsertIncident(ctx, incident); err == nil {
-			action.IncidentID = incident.ID
+	updated := s.actionDeliveryRecord(record, lifecycleID, entityKey, action)
+	updated.ID = delivery.ID
+	if dryRun {
+		updated.Status = "dry_run"
+	} else if external && !handled && updated.Status != "action_not_allowlisted" && updated.Status != "retry_scheduled" && updated.Status != "dead_letter" {
+		if updated.Attempts >= updated.MaxAttempts {
+			updated.Status = "dead_letter"
+		} else {
+			next := s.now().Add(time.Duration(updated.Attempts) * time.Minute)
+			updated.Status = "retry_scheduled"
+			updated.NextAttempt = &next
 		}
+	} else if updated.Status == "" {
+		updated.Status = "event_persisted"
 	}
-	return action
+	if err := s.store.SaveActionDelivery(ctx, updated); err != nil {
+		return action, fmt.Errorf("update lifecycle action delivery %q: %w", action.Name, err)
+	}
+	if incident, err := s.persistIncidentFromAction(ctx, record, lifecycleID, entityKey, action); err != nil {
+		return action, err
+	} else if incident != nil {
+		action.IncidentID = incident.ID
+	}
+	return action, nil
 }
 
 func actionWithCatalogDefaults(program *bcl.DecisionProgram, action LifecycleAction) LifecycleAction {
@@ -702,25 +755,32 @@ func (s *Service) actionDeliveryRecord(record storage.DefinitionRecord, lifecycl
 	return delivery
 }
 
-func (s *Service) incidentFromAction(ctx context.Context, record storage.DefinitionRecord, lifecycleID, entityKey string, action LifecycleAction) (storage.IncidentRecord, bool) {
+func (s *Service) persistIncidentFromAction(ctx context.Context, record storage.DefinitionRecord, lifecycleID, entityKey string, action LifecycleAction) (*storage.IncidentRecord, error) {
 	if !incidentAction(action.Name, action.Severity) {
-		return storage.IncidentRecord{}, false
+		return nil, nil
 	}
 	groupKey := strings.Join([]string{record.Name, record.Environment, lifecycleID, entityKey, action.Name, action.ReasonCode}, "|")
 	id := "incident-" + stableID(groupKey)
+	unlock, err := s.lockStoredEntity(ctx, strings.Join([]string{"incident", TenantFromContext(ctx), id}, "|"))
+	if err != nil {
+		return nil, err
+	}
+	defer unlock()
 	now := s.now()
 	count := 1
 	firstSeen := now
-	if existing, err := s.store.ListIncidents(ctx, storage.IncidentQuery{Definition: record.Name, Environment: record.Environment, Action: action.Name}); err == nil {
-		for _, item := range existing {
-			if item.ID == id {
-				count = item.Count + 1
-				firstSeen = item.FirstSeen
-				break
-			}
+	existing, err := s.store.ListIncidents(ctx, storage.IncidentQuery{Definition: record.Name, Environment: record.Environment, Action: action.Name})
+	if err != nil {
+		return nil, fmt.Errorf("load incidents for action %q: %w", action.Name, err)
+	}
+	for _, item := range existing {
+		if item.ID == id {
+			count = item.Count + 1
+			firstSeen = item.FirstSeen
+			break
 		}
 	}
-	return storage.IncidentRecord{
+	incident := storage.IncidentRecord{
 		ID:          id,
 		TenantID:    record.TenantID,
 		Definition:  record.Name,
@@ -734,7 +794,11 @@ func (s *Service) incidentFromAction(ctx context.Context, record storage.Definit
 		FirstSeen:   firstSeen,
 		LastSeen:    now,
 		Metadata:    map[string]any{"lifecycle": lifecycleID, "entity_key": entityKey},
-	}, true
+	}
+	if err := s.store.UpsertIncident(ctx, incident); err != nil {
+		return nil, fmt.Errorf("persist lifecycle incident for action %q: %w", action.Name, err)
+	}
+	return &incident, nil
 }
 
 func incidentAction(action, severity string) bool {
@@ -875,6 +939,9 @@ func (s *Service) dispatchWebhook(ctx context.Context, action LifecycleAction) b
 		return false
 	}
 	req.Header.Set("Content-Type", "application/json")
+	if action.DeliveryID != "" {
+		req.Header.Set("Idempotency-Key", action.DeliveryID)
+	}
 	resp, err := client.Do(req)
 	if err != nil {
 		return false

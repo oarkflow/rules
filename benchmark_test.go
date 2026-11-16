@@ -84,6 +84,71 @@ func BenchmarkServiceEvaluateStrictConcurrent(b *testing.B) {
 	})
 }
 
+func BenchmarkServiceEvaluateChain(b *testing.B) {
+	ctx := context.Background()
+	svc := NewService(storage.NewMemoryStore(), Config{})
+	const source = `module "chain-bench" {
+  decision_table "observe" {
+    default allow
+    row "no-op" { when { true == true } then { decision allow reason "observed" } }
+  }
+  chain "auth" {
+    entity "request.actor_key"
+    decision "observe"
+    watch "failed" {
+      event "failed_login"
+      window "10m"
+      step "notify" { threshold 1000000 action "notify" severity "medium" ttl "5m" }
+    }
+  }
+}`
+	if _, err := svc.Publish(ctx, PublishRequest{Name: "chain-bench", Source: source}); err != nil {
+		b.Fatal(err)
+	}
+	request := ChainEvaluateRequest{Input: map[string]any{"request": map[string]any{"actor_key": "bench-user"}}}
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		if _, err := svc.EvaluateChain(ctx, "chain-bench", "auth", request); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
+func BenchmarkServiceEvaluateLifecycle(b *testing.B) {
+	ctx := context.Background()
+	svc := NewService(storage.NewMemoryStore(), Config{})
+	const source = `module "lifecycle-bench" {
+  routes "http" { route "health" { method "GET" pattern "/health" } }
+  decision_table "observe" {
+    default allow
+    row "healthy" { when { response.status < 500 } then { decision allow reason "healthy" } }
+  }
+  lifecycle "http_request" {
+    entity "request.actor_key"
+    routes "http"
+    phase "post" { decision "observe" }
+  }
+}`
+	if _, err := svc.Publish(ctx, PublishRequest{Name: "lifecycle-bench", Source: source}); err != nil {
+		b.Fatal(err)
+	}
+	request := LifecycleEvaluateRequest{
+		Phase:    "post",
+		Method:   "GET",
+		Path:     "/health",
+		Input:    map[string]any{"request": map[string]any{"actor_key": "bench-user"}},
+		Response: map[string]any{"status": 200, "duration_ms": 12},
+	}
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		if _, err := svc.EvaluateLifecycle(ctx, "lifecycle-bench", "http_request", request); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
 func BenchmarkServiceExternalDatasetDenied(b *testing.B) {
 	ctx := context.Background()
 	svc := NewService(storage.NewMemoryStore(), Config{})

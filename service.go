@@ -26,13 +26,21 @@ type Service struct {
 	entityLocks sync.Map
 	latencyMu   sync.Mutex
 	latencies   map[string][]float64
+	latencyNext map[string]int
 }
 
-func (s *Service) lockEntity(key string) func() {
-	value, _ := s.entityLocks.LoadOrStore(key, &sync.Mutex{})
-	mu := value.(*sync.Mutex)
-	mu.Lock()
-	return mu.Unlock
+func (s *Service) lockEntity(ctx context.Context, key string) (func(), error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	value, _ := s.entityLocks.LoadOrStore(key, make(chan struct{}, 1))
+	lock := value.(chan struct{})
+	select {
+	case lock <- struct{}{}:
+		return func() { <-lock }, nil
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
 }
 
 func (s *Service) lockStoredEntity(ctx context.Context, key string) (func(), error) {
@@ -43,7 +51,7 @@ func (s *Service) lockStoredEntity(ctx context.Context, key string) (func(), err
 		}
 		return func() { _ = unlock() }, nil
 	}
-	return s.lockEntity(key), nil
+	return s.lockEntity(ctx, key)
 }
 
 func NewService(store storage.Store, cfg Config) *Service {
@@ -62,7 +70,7 @@ func NewService(store storage.Store, cfg Config) *Service {
 	if cfg.MaxRequestBytes == 0 {
 		cfg.MaxRequestBytes = 1 << 20
 	}
-	return &Service{store: store, cfg: cfg, latencies: map[string][]float64{}}
+	return &Service{store: store, cfg: cfg, latencies: map[string][]float64{}, latencyNext: map[string]int{}}
 }
 
 func (s *Service) Store() storage.Store { return s.store }
@@ -255,7 +263,16 @@ func (s *Service) GetLatencyHistograms(ctx context.Context) []LatencyHistogram {
 	}())
 	result := make([]LatencyHistogram, 0, len(labels))
 	for _, label := range labels {
-		samples := append([]float64(nil), s.latencies[label]...)
+		samples := s.latencies[label]
+		if len(samples) > 0 && len(samples) == 4096 {
+			next := s.latencyNext[label]
+			ordered := make([]float64, 0, len(samples))
+			ordered = append(ordered, samples[next:]...)
+			ordered = append(ordered, samples[:next]...)
+			samples = ordered
+		} else {
+			samples = append([]float64(nil), samples...)
+		}
 		sort.Float64s(samples)
 		histogram := LatencyHistogram{Label: label, Count: int64(len(samples))}
 		for _, sample := range samples {
@@ -284,11 +301,21 @@ func (s *Service) observeLatency(label string, milliseconds float64) {
 		return
 	}
 	s.latencyMu.Lock()
-	samples := append(s.latencies[label], milliseconds)
-	if len(samples) > 4096 {
-		samples = append([]float64(nil), samples[len(samples)-4096:]...)
+	if s.latencies == nil {
+		s.latencies = map[string][]float64{}
 	}
-	s.latencies[label] = samples
+	samples := s.latencies[label]
+	if len(samples) < 4096 {
+		s.latencies[label] = append(samples, milliseconds)
+	} else {
+		next := s.latencyNext[label]
+		samples[next] = milliseconds
+		s.latencies[label] = samples
+		if s.latencyNext == nil {
+			s.latencyNext = map[string]int{}
+		}
+		s.latencyNext[label] = (next + 1) % len(samples)
+	}
 	s.latencyMu.Unlock()
 }
 
@@ -524,6 +551,9 @@ func (s *Service) Rollback(ctx context.Context, name, targetVersion, environment
 
 func (s *Service) Evaluate(ctx context.Context, definition string, req EvaluateRequest) (*EvaluateResponse, error) {
 	ctx = s.requestContext(ctx, req.TenantID)
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	start := time.Now()
 	record, err := s.store.GetActiveDefinition(ctx, definition, first(req.Environment, s.cfg.Environment))
 	if err != nil {
@@ -567,6 +597,7 @@ func (s *Service) Evaluate(ctx context.Context, definition string, req EvaluateR
 		IncludeGates:    req.IncludeGates,
 		Counterfactuals: req.Counterfactuals,
 		IncludeFeatures: req.IncludeFeatures,
+		IncludeExplain:  req.IncludeExplain,
 		Strict:          s.strictEvaluation(req.Strict),
 	}, opts)
 	if s.cfg.OnDecision != nil {
@@ -609,6 +640,9 @@ func (s *Service) Evaluate(ctx context.Context, definition string, req EvaluateR
 
 func (s *Service) EvaluateChain(ctx context.Context, definition, chainID string, req ChainEvaluateRequest) (*ChainEvaluateResponse, error) {
 	ctx = s.requestContext(ctx, req.TenantID)
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	start := time.Now()
 	record, err := s.store.GetActiveDefinition(ctx, definition, s.cfg.Environment)
 	if err != nil {
@@ -654,7 +688,9 @@ func (s *Service) EvaluateChain(ctx context.Context, definition, chainID string,
 		return nil, err
 	}
 	now := s.now()
-	_ = s.store.DeleteExpiredChainStates(ctx, now)
+	if err := s.store.DeleteExpiredChainStates(ctx, now); err != nil {
+		return nil, fmt.Errorf("delete expired chain states: %w", err)
+	}
 	statesBefore := s.loadChainStates(ctx, chain, entityKey)
 	allEvents, err := s.store.QueryChainEvents(ctx, storage.ChainEventQuery{Definition: definition, Environment: record.Environment, Chain: chain.ID, EntityKey: entityKey, IncludeExpired: true})
 	if err != nil {
@@ -691,9 +727,10 @@ func (s *Service) EvaluateChain(ctx context.Context, definition, chainID string,
 	})
 	for _, decisionID := range chain.Decisions {
 		report, evalErr := bcl.EvaluateDecisionPlatform(record.Program, bcl.DecisionPlatformRequest{
-			Decision: decisionID,
-			Input:    workingInput,
-			Strict:   s.strictEvaluation(req.Strict),
+			Decision:       decisionID,
+			Input:          workingInput,
+			IncludeExplain: req.IncludeExplain,
+			Strict:         s.strictEvaluation(req.Strict),
 		}, opts)
 		evaluation.Decisions = append(evaluation.Decisions, ChainDecisionResult{Decision: decisionID, Report: report})
 		if evalErr != nil {
@@ -765,6 +802,9 @@ func (s *Service) EvaluateChain(ctx context.Context, definition, chainID string,
 
 func (s *Service) EvaluateLifecycle(ctx context.Context, definition, lifecycleID string, req LifecycleEvaluateRequest) (*LifecycleEvaluateResponse, error) {
 	ctx = s.requestContext(ctx, req.TenantID)
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	start := time.Now()
 	record, err := s.store.GetActiveDefinition(ctx, definition, s.cfg.Environment)
 	if err != nil {
@@ -807,7 +847,9 @@ func (s *Service) EvaluateLifecycle(ctx context.Context, definition, lifecycleID
 		augmented["request"] = requestFacts
 	}
 	now := s.now()
-	_ = s.store.DeleteExpiredChainStates(ctx, now)
+	if err := s.store.DeleteExpiredChainStates(ctx, now); err != nil {
+		return nil, fmt.Errorf("delete expired lifecycle chain states: %w", err)
+	}
 	chainStates, chainEvents := s.lifecycleChainContext(ctx, definition, record, lifecycle, augmented)
 	if len(chainStates) > 0 {
 		augmented["chain_state"] = mergeMaps(mapFromAny(augmented["chain_state"]), chainStateFacts(chainStates))
@@ -854,9 +896,10 @@ func (s *Service) EvaluateLifecycle(ctx context.Context, definition, lifecycleID
 	opts.Session = runtimeSession
 	for _, decisionID := range phase.Decisions {
 		report, evalErr := bcl.EvaluateDecisionPlatform(record.Program, bcl.DecisionPlatformRequest{
-			Decision: decisionID,
-			Input:    augmented,
-			Strict:   s.strictEvaluation(req.Strict),
+			Decision:       decisionID,
+			Input:          augmented,
+			IncludeExplain: req.IncludeExplain,
+			Strict:         s.strictEvaluation(req.Strict),
 		}, opts)
 		evaluation.Decisions = append(evaluation.Decisions, ChainDecisionResult{Decision: decisionID, Report: report})
 		if evalErr != nil {
@@ -867,7 +910,11 @@ func (s *Service) EvaluateLifecycle(ctx context.Context, definition, lifecycleID
 			hydrateDecisionResult(record.Program, report.Decision)
 			evaluation.FinalDecision(report.Decision)
 			evaluation.AddEnforcement(enforcementWithActiveState(enforcementFromDecision(report.Decision), chainStates, now))
-			evaluation.Actions = append(evaluation.Actions, s.lifecycleActionsFromDecision(ctx, record, lifecycle.ID, entityKey, report.Decision, req.DryRun, augmented)...)
+			actions, actionErr := s.lifecycleActionsFromDecision(ctx, record, lifecycle.ID, entityKey, report.Decision, req.DryRun, augmented)
+			if actionErr != nil {
+				return nil, actionErr
+			}
+			evaluation.Actions = append(evaluation.Actions, actions...)
 		}
 	}
 	chainEvent := req.Event
@@ -903,23 +950,9 @@ func (s *Service) EvaluateLifecycle(ctx context.Context, definition, lifecycleID
 		for _, event := range resp.Evaluation.Events {
 			action := LifecycleAction{Name: event.EventType, ReasonCode: event.ReasonCode, Severity: event.Severity, Attributes: cloneMap(event.Attributes), Metadata: cloneMap(event.Metadata)}
 			action = actionWithCatalogDefaults(record.Program, action)
-			handled, result := false, &ActionResult{Handled: false, Status: "dry_run"}
-			if !req.DryRun {
-				handled, result = s.dispatchLifecycleAction(ctx, record, action)
-			}
-			action.Handled = handled
-			action.Result = result
-			delivery := s.actionDeliveryRecord(record, lifecycle.ID, entityKey, action)
-			if delivery.Status == "" {
-				delivery.Status = "event_persisted"
-			}
-			if err := s.store.SaveActionDelivery(ctx, delivery); err == nil {
-				action.DeliveryID = delivery.ID
-			}
-			if incident, ok := s.incidentFromAction(ctx, record, lifecycle.ID, entityKey, action); ok {
-				if err := s.store.UpsertIncident(ctx, incident); err == nil {
-					action.IncidentID = incident.ID
-				}
+			action, err = s.persistAndDispatchLifecycleAction(ctx, record, lifecycle.ID, entityKey, action, req.DryRun)
+			if err != nil {
+				return nil, err
 			}
 			evaluation.Actions = append(evaluation.Actions, action)
 		}
@@ -1330,6 +1363,14 @@ func (s *Service) StartWorkflow(ctx context.Context, definition, workflowID stri
 
 func (s *Service) AdvanceWorkflow(ctx context.Context, runID string, input map[string]any) (*WorkflowRun, error) {
 	ctx = s.requestContext(ctx, "")
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	unlock, err := s.lockStoredEntity(ctx, strings.Join([]string{"workflow", TenantFromContext(ctx), runID}, "|"))
+	if err != nil {
+		return nil, err
+	}
+	defer unlock()
 	start := time.Now()
 	record, err := s.store.GetWorkflowRun(ctx, runID)
 	if err != nil {
@@ -1408,7 +1449,10 @@ func (s *Service) TickWorkflows(ctx context.Context, req WorkflowTickRequest) (W
 		if next == "" {
 			continue
 		}
-		unlock := s.lockEntity("workflow|" + record.ID)
+		unlock, lockErr := s.lockStoredEntity(ctx, strings.Join([]string{"workflow", TenantFromContext(ctx), record.ID}, "|"))
+		if lockErr != nil {
+			return result, lockErr
+		}
 		definition, getErr := s.store.GetDefinitionVersion(ctx, record.Definition, record.Version, record.Environment)
 		if getErr != nil {
 			unlock()

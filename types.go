@@ -98,6 +98,7 @@ type EvaluateRequest struct {
 	IncludeGates           bool           `json:"include_gates,omitempty"`
 	Counterfactuals        bool           `json:"counterfactuals,omitempty"`
 	IncludeFeatures        bool           `json:"include_features,omitempty"`
+	IncludeExplain         bool           `json:"include_explain,omitempty"`
 	Strict                 bool           `json:"strict,omitempty"`
 	Environment            string         `json:"environment,omitempty"`
 	ShadowCandidateSource  string         `json:"shadow_candidate_source,omitempty"`
@@ -113,12 +114,13 @@ type EvaluateResponse struct {
 }
 
 type ChainEvaluateRequest struct {
-	TenantID  string         `json:"tenant_id,omitempty"`
-	Input     map[string]any `json:"input,omitempty"`
-	Event     string         `json:"event,omitempty"`
-	EventID   string         `json:"event_id,omitempty"`
-	EntityKey string         `json:"entity_key,omitempty"`
-	Strict    bool           `json:"strict,omitempty"`
+	TenantID       string         `json:"tenant_id,omitempty"`
+	Input          map[string]any `json:"input,omitempty"`
+	Event          string         `json:"event,omitempty"`
+	EventID        string         `json:"event_id,omitempty"`
+	EntityKey      string         `json:"entity_key,omitempty"`
+	Strict         bool           `json:"strict,omitempty"`
+	IncludeExplain bool           `json:"include_explain,omitempty"`
 }
 
 type ChainEvaluateResponse struct {
@@ -147,18 +149,19 @@ type ChainDecisionResult struct {
 }
 
 type LifecycleEvaluateRequest struct {
-	TenantID     string         `json:"tenant_id,omitempty"`
-	EvaluationID string         `json:"evaluation_id,omitempty"`
-	Phase        string         `json:"phase"`
-	Method       string         `json:"method,omitempty"`
-	Path         string         `json:"path,omitempty"`
-	Request      map[string]any `json:"request,omitempty"`
-	Input        map[string]any `json:"input,omitempty"`
-	Response     map[string]any `json:"response,omitempty"`
-	Event        string         `json:"event,omitempty"`
-	EntityKey    string         `json:"entity_key,omitempty"`
-	Strict       bool           `json:"strict,omitempty"`
-	DryRun       bool           `json:"dry_run,omitempty"`
+	TenantID       string         `json:"tenant_id,omitempty"`
+	EvaluationID   string         `json:"evaluation_id,omitempty"`
+	Phase          string         `json:"phase"`
+	Method         string         `json:"method,omitempty"`
+	Path           string         `json:"path,omitempty"`
+	Request        map[string]any `json:"request,omitempty"`
+	Input          map[string]any `json:"input,omitempty"`
+	Response       map[string]any `json:"response,omitempty"`
+	Event          string         `json:"event,omitempty"`
+	EntityKey      string         `json:"entity_key,omitempty"`
+	Strict         bool           `json:"strict,omitempty"`
+	IncludeExplain bool           `json:"include_explain,omitempty"`
+	DryRun         bool           `json:"dry_run,omitempty"`
 }
 
 type ActionRetryRequest struct {

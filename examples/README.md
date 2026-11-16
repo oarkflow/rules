@@ -5,47 +5,59 @@ These examples are intentionally self-contained. Each directory is a small domai
 * `main.go` with typed Go domain objects, use-case-specific enrichment/scoring/planning logic, Condition service setup, and business follow-up behavior.
 * `decision.bcl` with the policy, tests, reason codes, and decision table for that use case.
 
-Run any example from the `condition` module:
+## Start With the Comprehensive Examples
+
+For a complete BCL-driven application, start with [`complete-platform`](complete-platform/README.md). It combines modular decision tables, route catalogs, action and output contracts, policy overlays, lifecycle phases, stateful chains, response classification, BCL scenarios, and a runnable Fiber host. The policy lives in `.bcl`; the Go app supplies facts and applies the returned enforcement response.
+
+Run it from the repository root:
 
 ```sh
-go run ./examples/access-control
-go run ./examples/payment-risk
-go run ./examples/kyc-onboarding
-go run ./examples/ai-safety
-go run ./examples/logistics-routing
-go run ./examples/healthcare-prior-auth
-go run ./examples/dynamic-pricing
-go run ./examples/procurement-approval
-go run ./examples/support-routing
-go run ./examples/api-traffic-control
-go run ./examples/http-auth-guard
-go run ./examples/request-lifecycle
-go run ./examples/complete-platform
-go run ./examples/anomaly-detection
-go run ./examples/manufacturing-iot
-go run ./examples/hr-leave-approval
-go run ./examples/education-scholarship
-go run ./examples/data-governance
-go run ./examples/content-moderation
-go run ./examples/loan-eligibility
-go run ./examples/cybersecurity-session-risk
-go run ./examples/government-benefits
-go run ./examples/marketplace-escrow
-go run ./examples/devops-deployment-gate
-go run ./examples/telecom-notification-routing
-go run ./examples/aml-transaction-monitoring
-go run ./examples/insurance-claims
-go run ./examples/subscription-entitlements
-go run ./examples/crm-churn-upsell
-go run ./examples/investment-trade-compliance
-go run ./examples/smart-city-traffic
-go run ./examples/supply-chain-replenishment
-go run ./examples/temporal-behavior-risk
-go run ./examples/fraud-ring-graph
-go run ./examples/geo-territory-assignment
-go run ./examples/event-correlation
-go run ./examples/product-recommendation
-go run ./examples/autonomous-remediation
+cd examples && go run ./complete-platform
+```
+
+For operations and governance features such as signed publishing, durable retries, idempotency, workflow SLAs, mutation testing, and route import/export, continue with [`production-features`](production-features/README.md).
+
+Run any example from the repository root:
+
+```sh
+cd examples && go run ./access-control
+cd examples && go run ./payment-risk
+cd examples && go run ./kyc-onboarding
+cd examples && go run ./ai-safety
+cd examples && go run ./logistics-routing
+cd examples && go run ./healthcare-prior-auth
+cd examples && go run ./dynamic-pricing
+cd examples && go run ./procurement-approval
+cd examples && go run ./support-routing
+cd examples && go run ./api-traffic-control
+cd examples && go run ./http-auth-guard
+cd examples && go run ./request-lifecycle
+cd examples && go run ./complete-platform
+cd examples && go run ./anomaly-detection
+cd examples && go run ./manufacturing-iot
+cd examples && go run ./hr-leave-approval
+cd examples && go run ./education-scholarship
+cd examples && go run ./data-governance
+cd examples && go run ./content-moderation
+cd examples && go run ./loan-eligibility
+cd examples && go run ./cybersecurity-session-risk
+cd examples && go run ./government-benefits
+cd examples && go run ./marketplace-escrow
+cd examples && go run ./devops-deployment-gate
+cd examples && go run ./telecom-notification-routing
+cd examples && go run ./aml-transaction-monitoring
+cd examples && go run ./insurance-claims
+cd examples && go run ./subscription-entitlements
+cd examples && go run ./crm-churn-upsell
+cd examples && go run ./investment-trade-compliance
+cd examples && go run ./smart-city-traffic
+cd examples && go run ./supply-chain-replenishment
+cd examples && go run ./temporal-behavior-risk
+cd examples && go run ./fraud-ring-graph
+cd examples && go run ./geo-territory-assignment
+cd examples && go run ./event-correlation
+cd examples && go run ./product-recommendation
+cd examples && go run ./autonomous-remediation
 ```
 
 Production server configuration examples live in `production-server`. They are not Go use-case runners; they show BCL-native runtime config for file storage, strict validation/evaluation, fail-closed audit behavior, HTTP timeouts, trusted proxies, TLS, rate limits, and route-scoped authz.
@@ -98,5 +110,5 @@ The examples duplicate their small amount of Condition service bootstrapping on 
 `http-auth-guard` can also run as a curlable server:
 
 ```sh
-go run ./examples/http-auth-guard --serve --addr :8080
+cd examples && go run ./http-auth-guard --serve --addr :8080
 ```

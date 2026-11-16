@@ -123,6 +123,7 @@ A complete runnable BCL server config is in `examples/production-server`.
 For the native Condition policy platform features, read:
 
 - `docs/platform-guide.md`
+- `docs/capability-inventory.md` for the feature-to-implementation and acceptance-test map.
 - `examples/request-lifecycle`
 - `examples/http-auth-guard`
 - `examples/complete-platform`
@@ -482,6 +483,8 @@ curl -H 'X-Roles: condition-admin' 'http://localhost:8080/v1/audits?definition=m
 - Validate, simulate, publish, and inspect events/actions/incidents/audits.
 
 ## HTTP API
+
+Decision behavior is authored and tested in BCL, for example in [`examples/payment-risk/decision.bcl`](examples/payment-risk/decision.bcl). The JSON shown below carries runtime facts to that published BCL policy; it does not define or replace the policy.
 
 Use `X-Roles: condition-admin` for local demos, or configure roles in `.authz`.
 

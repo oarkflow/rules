@@ -6,7 +6,9 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -62,6 +64,55 @@ func TestServicePublishEvaluateTestAndAudit(t *testing.T) {
 	}
 }
 
+func TestServiceEvaluateIncludesRuleExplanationOnRequest(t *testing.T) {
+	ctx := context.Background()
+	svc := NewService(storage.NewMemoryStore(), Config{})
+	source := `module "explain" {
+  decision_table "access" {
+    default deny
+    hit_policy first
+    row "allow-known" {
+      when { request.known == true }
+      then { outcome { decision allow reason "known actor" attributes { action "allow" } } }
+      reason "known actor"
+      reason_code "KNOWN"
+    }
+    row "deny-unknown" {
+      when { request.known == false }
+      then { outcome { decision deny reason "unknown actor" attributes { action "deny" } } }
+      reason "unknown actor"
+      reason_code "UNKNOWN"
+    }
+  }
+  test "unknown actor is denied" {
+    decision "access"
+    input { request.known false }
+    expect { effect "deny" reason_code "UNKNOWN" }
+  }
+}`
+	if _, err := svc.Publish(ctx, PublishRequest{Name: "explain", Source: source, RunTests: true}); err != nil {
+		t.Fatal(err)
+	}
+	response, err := svc.Evaluate(ctx, "explain", EvaluateRequest{
+		Decision:       "access",
+		Input:          map[string]any{"request": map[string]any{"known": false}},
+		IncludeExplain: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if response.Report == nil || response.Report.Decision == nil {
+		t.Fatalf("missing decision report: %#v", response)
+	}
+	statuses := map[string]bool{}
+	for _, trace := range response.Report.Decision.Explain {
+		statuses[trace.Status] = true
+	}
+	if !statuses["matched"] || !statuses["selected"] || !statuses["skipped"] {
+		t.Fatalf("explanation does not show matched, selected, and rejected rows: %#v", response.Report.Decision.Explain)
+	}
+}
+
 func TestServiceFailsClosedWhenAuditAppendFails(t *testing.T) {
 	ctx := context.Background()
 	svc := NewService(failingAuditStore{Store: storage.NewMemoryStore()}, Config{})
@@ -80,6 +131,206 @@ type failingAuditStore struct {
 
 func (s failingAuditStore) AppendAudit(context.Context, audit.Envelope) error {
 	return errors.New("audit sink unavailable")
+}
+
+type failingLifecycleStore struct {
+	storage.Store
+	fail string
+}
+
+func (s failingLifecycleStore) AppendChainEvent(ctx context.Context, event storage.ChainEventRecord) error {
+	if s.fail == "append_event" {
+		return errors.New("event store unavailable")
+	}
+	return s.Store.AppendChainEvent(ctx, event)
+}
+
+func (s failingLifecycleStore) SaveActionDelivery(ctx context.Context, delivery storage.ActionDeliveryRecord) error {
+	if s.fail == "save_delivery" {
+		return errors.New("delivery store unavailable")
+	}
+	return s.Store.SaveActionDelivery(ctx, delivery)
+}
+
+func (s failingLifecycleStore) ListIncidents(ctx context.Context, query storage.IncidentQuery) ([]storage.IncidentRecord, error) {
+	if s.fail == "list_incidents" {
+		return nil, errors.New("incident query unavailable")
+	}
+	return s.Store.ListIncidents(ctx, query)
+}
+
+func (s failingLifecycleStore) UpsertIncident(ctx context.Context, incident storage.IncidentRecord) error {
+	if s.fail == "save_incident" {
+		return errors.New("incident store unavailable")
+	}
+	return s.Store.UpsertIncident(ctx, incident)
+}
+
+func (s failingLifecycleStore) DeleteExpiredChainStates(ctx context.Context, now time.Time) error {
+	if s.fail == "expire_states" {
+		return errors.New("state cleanup unavailable")
+	}
+	return s.Store.DeleteExpiredChainStates(ctx, now)
+}
+
+func TestServiceLifecycleReturnsPersistenceFailures(t *testing.T) {
+	for _, failure := range []string{"expire_states", "append_event", "save_delivery", "list_incidents", "save_incident"} {
+		t.Run(failure, func(t *testing.T) {
+			ctx := context.Background()
+			store := failingLifecycleStore{Store: storage.NewMemoryStore(), fail: failure}
+			svc := NewService(store, Config{})
+			if _, err := svc.Publish(ctx, PublishRequest{Name: "lifecycle-demo", Source: lifecycleSource}); err != nil {
+				t.Fatal(err)
+			}
+			_, err := svc.EvaluateLifecycle(ctx, "lifecycle-demo", "http_request", LifecycleEvaluateRequest{
+				Phase:    "post",
+				Method:   "GET",
+				Path:     "/admin/reports",
+				Input:    map[string]any{"request": map[string]any{"actor_key": "failure-user"}},
+				Response: map[string]any{"status": 500},
+			})
+			if err == nil || !strings.Contains(err.Error(), "unavailable") {
+				t.Fatalf("expected %s persistence error, got %v", failure, err)
+			}
+		})
+	}
+}
+
+func TestServiceLifecyclePersistsDeliveryBeforeHandler(t *testing.T) {
+	ctx := context.Background()
+	store := storage.NewMemoryStore()
+	observed := 0
+	svc := NewService(store, Config{ActionHandlers: map[string]ActionHandler{
+		"server_error": func(ctx context.Context, action LifecycleAction) (ActionResult, error) {
+			if action.DeliveryID == "" {
+				return ActionResult{}, errors.New("missing delivery ID")
+			}
+			deliveries, err := store.ListActionDeliveries(ctx, storage.ActionDeliveryQuery{Definition: "lifecycle-demo"})
+			if err != nil {
+				return ActionResult{}, err
+			}
+			for _, delivery := range deliveries {
+				if delivery.ID == action.DeliveryID {
+					observed++
+					return ActionResult{Handled: true, Status: "handled"}, nil
+				}
+			}
+			return ActionResult{}, errors.New("delivery intent was not persisted before handler")
+		},
+	}})
+	if _, err := svc.Publish(ctx, PublishRequest{Name: "lifecycle-demo", Source: lifecycleSource}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.EvaluateLifecycle(ctx, "lifecycle-demo", "http_request", LifecycleEvaluateRequest{
+		Phase: "post", Method: "GET", Path: "/admin/reports",
+		Input:    map[string]any{"request": map[string]any{"actor_key": "outbox-user"}},
+		Response: map[string]any{"status": 500},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if observed == 0 {
+		t.Fatal("action handler was not called")
+	}
+}
+
+func TestServiceLifecycleDeadLettersFailedEventHandler(t *testing.T) {
+	ctx := context.Background()
+	store := storage.NewMemoryStore()
+	svc := NewService(store, Config{ActionHandlers: map[string]ActionHandler{
+		"server_error": func(context.Context, LifecycleAction) (ActionResult, error) {
+			return ActionResult{Handled: false, Status: "not_sent"}, nil
+		},
+	}})
+	if _, err := svc.Publish(ctx, PublishRequest{Name: "lifecycle-demo", Source: lifecycleSource}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.EvaluateLifecycle(ctx, "lifecycle-demo", "http_request", LifecycleEvaluateRequest{
+		Phase: "post", Method: "GET", Path: "/admin/reports",
+		Input:    map[string]any{"request": map[string]any{"actor_key": "failed-handler-user"}},
+		Response: map[string]any{"status": 500},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	deliveries, err := store.ListActionDeliveries(ctx, storage.ActionDeliveryQuery{Definition: "lifecycle-demo", Action: "server_error"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(deliveries) == 0 {
+		t.Fatal("missing server_error delivery record")
+	}
+	for _, delivery := range deliveries {
+		if delivery.Status != "dead_letter" {
+			t.Fatalf("failed handler delivery was not scheduled/rejected: %#v", delivery)
+		}
+	}
+}
+
+func TestServiceConcurrentIncidentUpdatesPreserveCount(t *testing.T) {
+	ctx := context.Background()
+	store := storage.NewMemoryStore()
+	svc := NewService(store, Config{})
+	record := storage.DefinitionRecord{TenantID: "default", Name: "incidents", Version: "1", Environment: "test"}
+	const count = 20
+	var wg sync.WaitGroup
+	errs := make(chan error, count)
+	for i := 0; i < count; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			_, err := svc.persistIncidentFromAction(ctx, record, "http_request", "same-entity", LifecycleAction{Name: "notify", Severity: "high", ReasonCode: "RISK"})
+			if err != nil {
+				errs <- err
+			}
+		}()
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		t.Errorf("persist incident: %v", err)
+	}
+	incidents, err := store.ListIncidents(ctx, storage.IncidentQuery{Definition: "incidents", Environment: "test", Action: "notify"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(incidents) != 1 || incidents[0].Count != count {
+		t.Fatalf("incident counts = %#v, want one incident with count %d", incidents, count)
+	}
+}
+
+func TestServiceEvaluationHonorsCanceledContextBeforeAudit(t *testing.T) {
+	ctx := context.Background()
+	svc := NewService(storage.NewMemoryStore(), Config{})
+	if _, err := svc.Publish(ctx, PublishRequest{Name: "demo", Source: demoSource}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.Publish(ctx, PublishRequest{Name: "chain-demo", Source: chainSource}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.Publish(ctx, PublishRequest{Name: "lifecycle-demo", Source: lifecycleSource}); err != nil {
+		t.Fatal(err)
+	}
+	before, err := svc.ListAudits(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	canceled, cancel := context.WithCancel(ctx)
+	cancel()
+	if _, err := svc.Evaluate(canceled, "demo", EvaluateRequest{Decision: "access"}); !errors.Is(err, context.Canceled) {
+		t.Fatalf("Evaluate error = %v, want context canceled", err)
+	}
+	if _, err := svc.EvaluateChain(canceled, "chain-demo", "auth_guard", ChainEvaluateRequest{}); !errors.Is(err, context.Canceled) {
+		t.Fatalf("EvaluateChain error = %v, want context canceled", err)
+	}
+	if _, err := svc.EvaluateLifecycle(canceled, "lifecycle-demo", "http_request", LifecycleEvaluateRequest{Phase: "pre"}); !errors.Is(err, context.Canceled) {
+		t.Fatalf("EvaluateLifecycle error = %v, want context canceled", err)
+	}
+	after, err := svc.ListAudits(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(after) != len(before) {
+		t.Fatalf("canceled evaluation added audits: before=%d after=%d", len(before), len(after))
+	}
 }
 
 func TestServiceEvaluateUsesRuntimeContextAndSession(t *testing.T) {
@@ -788,6 +1039,50 @@ func TestServiceWorkflowStartAdvance(t *testing.T) {
 	}
 }
 
+func TestServiceConcurrentWorkflowAdvancesAreSerialized(t *testing.T) {
+	ctx := context.Background()
+	source := `module "workflow-lock" {
+  decision_table "required" { default allow row "allow" { when { true == true } then { decision allow } } }
+  workflow "review" {
+    start "intake"
+    stage "intake" { rule "to-review" { default true next_stage "review" } }
+    stage "review" { role "reviewer" }
+  }
+}`
+	svc := NewService(storage.NewMemoryStore(), Config{})
+	if _, err := svc.Publish(ctx, PublishRequest{Name: "workflow-lock", Source: source}); err != nil {
+		t.Fatal(err)
+	}
+	run, err := svc.StartWorkflow(ctx, "workflow-lock", "review", map[string]any{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var wg sync.WaitGroup
+	errs := make(chan error, 2)
+	for i := 0; i < 2; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			_, err := svc.AdvanceWorkflow(ctx, run.ID, nil)
+			if err != nil {
+				errs <- err
+			}
+		}()
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		t.Errorf("AdvanceWorkflow: %v", err)
+	}
+	stored, err := svc.GetWorkflowRun(ctx, run.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stored.Status != "completed" {
+		t.Fatalf("concurrent advances lost a transition: %#v", stored)
+	}
+}
+
 func TestServiceDeeplyNestedConditionalWorkflow(t *testing.T) {
 	ctx := context.Background()
 	source := `module "nested-workflow" {
@@ -966,6 +1261,79 @@ func TestServiceEvaluateChainEscalatingWatch(t *testing.T) {
 	}
 }
 
+func TestServiceEvaluateChainEventIDIsIdempotent(t *testing.T) {
+	ctx := context.Background()
+	store := storage.NewMemoryStore()
+	svc := NewService(store, Config{})
+	if _, err := svc.Publish(ctx, PublishRequest{Name: "chain-demo", Source: chainSource}); err != nil {
+		t.Fatal(err)
+	}
+	request := ChainEvaluateRequest{
+		Input:   map[string]any{"principal": map[string]any{"id": "idempotent-user"}, "request": map[string]any{}},
+		Event:   "failed_login",
+		EventID: "event-once",
+	}
+	first, err := svc.EvaluateChain(ctx, "chain-demo", "auth_guard", request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := svc.EvaluateChain(ctx, "chain-demo", "auth_guard", request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(first.Evaluation.Events) == 0 || len(second.Evaluation.Events) != 0 {
+		t.Fatalf("first events=%d, replay events=%d", len(first.Evaluation.Events), len(second.Evaluation.Events))
+	}
+	firstCounts := map[string]int{}
+	for _, state := range first.Evaluation.StateAfter {
+		firstCounts[state.Watch] = state.Counters["failed_login"]
+	}
+	secondCounts := map[string]int{}
+	for _, state := range second.Evaluation.StateAfter {
+		secondCounts[state.Watch] = state.Counters["failed_login"]
+	}
+	if !reflect.DeepEqual(firstCounts, secondCounts) {
+		t.Fatalf("replay changed state: first=%#v replay=%#v", firstCounts, secondCounts)
+	}
+}
+
+func TestServiceConcurrentChainEventsPreserveState(t *testing.T) {
+	ctx := context.Background()
+	svc := NewService(storage.NewMemoryStore(), Config{})
+	if _, err := svc.Publish(ctx, PublishRequest{Name: "chain-demo", Source: chainSource}); err != nil {
+		t.Fatal(err)
+	}
+	const count = 20
+	var wg sync.WaitGroup
+	errs := make(chan error, count)
+	for i := 0; i < count; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			_, err := svc.EvaluateChain(ctx, "chain-demo", "auth_guard", ChainEvaluateRequest{
+				Input:   map[string]any{"principal": map[string]any{"id": "concurrent-user"}, "request": map[string]any{}},
+				Event:   "failed_login",
+				EventID: fmt.Sprintf("concurrent-event-%d", i),
+			})
+			if err != nil {
+				errs <- err
+			}
+		}(i)
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		t.Errorf("EvaluateChain: %v", err)
+	}
+	state, err := svc.Store().GetChainState(ctx, "auth_guard", "failed_login_escalation", "concurrent-user")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := state.Counters["failed_login"]; got != count {
+		t.Fatalf("failed_login count = %d, want %d (state %#v)", got, count, state)
+	}
+}
+
 func TestServiceEvaluateChainCrossDecisionEventsAndTenantIsolation(t *testing.T) {
 	ctx := context.Background()
 	svc := NewService(storage.NewMemoryStore(), Config{})
@@ -1110,6 +1478,41 @@ func TestServiceEvaluateLifecyclePreAndPostEscalation(t *testing.T) {
 	}
 	if len(post.Evaluation.Actions) == 0 {
 		t.Fatalf("missing lifecycle actions: %#v", post.Evaluation)
+	}
+}
+
+func TestServiceEvaluateLifecycleEvaluationIDReturnsCachedResult(t *testing.T) {
+	ctx := context.Background()
+	store := storage.NewMemoryStore()
+	svc := NewService(store, Config{})
+	if _, err := svc.Publish(ctx, PublishRequest{Name: "lifecycle-demo", Source: lifecycleSource}); err != nil {
+		t.Fatal(err)
+	}
+	request := LifecycleEvaluateRequest{
+		EvaluationID: "request-once",
+		Phase:        "post",
+		Method:       "GET",
+		Path:         "/admin/reports",
+		Input:        map[string]any{"request": map[string]any{"actor_key": "idempotent-user"}},
+		Response:     map[string]any{"status": 500, "duration_ms": 12},
+	}
+	first, err := svc.EvaluateLifecycle(ctx, "lifecycle-demo", "http_request", request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := svc.EvaluateLifecycle(ctx, "lifecycle-demo", "http_request", request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first.Evaluation.AuditID == "" || second.Evaluation.AuditID != first.Evaluation.AuditID {
+		t.Fatalf("first audit=%q replay audit=%q", first.Evaluation.AuditID, second.Evaluation.AuditID)
+	}
+	deliveries, err := store.ListActionDeliveries(ctx, storage.ActionDeliveryQuery{Definition: "lifecycle-demo"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(deliveries) != len(first.Evaluation.Actions) {
+		t.Fatalf("delivery count after replay = %d, first result actions = %d", len(deliveries), len(first.Evaluation.Actions))
 	}
 }
 
@@ -2701,4 +3104,22 @@ func containsString(values []string, want string) bool {
 		}
 	}
 	return false
+}
+
+func TestLatencyHistogramUsesNewestBoundedSamples(t *testing.T) {
+	svc := NewService(nil, Config{})
+	for sample := 1; sample <= 5000; sample++ {
+		svc.observeLatency("decision", float64(sample))
+	}
+	histograms := svc.GetLatencyHistograms(context.Background())
+	if len(histograms) != 1 {
+		t.Fatalf("expected one histogram, got %d", len(histograms))
+	}
+	histogram := histograms[0]
+	if histogram.Count != 4096 {
+		t.Fatalf("expected 4096 retained samples, got %d", histogram.Count)
+	}
+	if histogram.Total != 12093440 {
+		t.Fatalf("expected total of newest 4096 samples 12093440, got %v", histogram.Total)
+	}
 }

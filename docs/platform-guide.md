@@ -297,6 +297,34 @@ row "form-login-failure" {
 }
 ```
 
+## Decision Explanations
+
+Author the rule and its scenario in BCL. For example:
+
+```bcl
+module "access" {
+  decision_table "access" {
+    default deny
+    hit_policy first
+
+    row "allow-known" {
+      when { request.known == true }
+      then { outcome { decision allow reason "known actor" attributes { action "allow" } } }
+      reason "known actor"
+      reason_code "KNOWN"
+    }
+  }
+
+  test "known actor is allowed" {
+    decision "access"
+    input { request.known true }
+    expect { effect "allow" reason_code "KNOWN" }
+  }
+}
+```
+
+When the host invokes evaluation, it can set `IncludeExplain: true` on `EvaluateRequest`, `ChainEvaluateRequest`, or `LifecycleEvaluateRequest` to return the BCL rule trace. The decision result's `explain` entries report rule IDs, condition outcomes, match/selection status, priority, reason codes, and emitted action/event details. Explanation is opt-in because it adds response size and evaluation work; it does not change the BCL policy or its decision.
+
 ## Response Classification
 
 Use `response_classifier` to convert HTTP status into stable facts.
@@ -486,6 +514,16 @@ Effect:
 - Action delivery records track status, attempts, next retry, max attempts, and dead-letter state.
 - High-severity actions can create or update incident records.
 - `dry_run` lifecycle evaluations persist dry-run delivery records without external side effects.
+
+### Failure And Retry Behavior
+
+- Evaluation with an already-canceled context returns the context error before reading the active definition or writing an audit record.
+- Lifecycle persistence failures for chain events, action deliveries, incidents, or expired-state cleanup are returned to the caller. The service does not report a successful lifecycle result when these writes fail.
+- The lifecycle event and delivery intent are stored before an external action handler or webhook is called. If the initial intent write fails, the external handler is not called.
+- Webhook requests carry the persisted delivery ID in `Idempotency-Key`. Host `ActionHandler` implementations receive the same ID in `LifecycleAction.DeliveryID` and should use it to deduplicate.
+- Delivery is at least once across process crashes: a crash after the external system accepts an action but before Condition stores the final status can cause a retry. Handlers should be idempotent. Failed deliveries are retried according to the action catalog and eventually become dead letters.
+- Storage writes made earlier in an evaluation are not rolled back if a later write or audit append fails. Callers should treat an error after an external action as an unknown outcome and reconcile using the delivery ID and audit/action records.
+- Audit append remains fail-closed. If the audit sink fails, the operation returns an error even if earlier durable work completed.
 
 ## Storage, Retention, And Readiness
 

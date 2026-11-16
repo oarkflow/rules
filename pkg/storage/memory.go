@@ -26,10 +26,17 @@ type MemoryStore struct {
 }
 
 func (s *MemoryStore) LockEntity(ctx context.Context, key string) (func() error, error) {
-	value, _ := s.entityLocks.LoadOrStore(key, &sync.Mutex{})
-	mu := value.(*sync.Mutex)
-	mu.Lock()
-	return func() error { mu.Unlock(); return nil }, nil
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	value, _ := s.entityLocks.LoadOrStore(key, make(chan struct{}, 1))
+	lock := value.(chan struct{})
+	select {
+	case lock <- struct{}{}:
+		return func() error { <-lock; return nil }, nil
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
 }
 
 func NewMemoryStore() *MemoryStore {

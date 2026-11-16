@@ -40,6 +40,46 @@ func TestFileStorePersistsDefinitionAndAudit(t *testing.T) {
 	}
 }
 
+func BenchmarkMemoryStoreAppendChainEvent(b *testing.B) {
+	store := NewMemoryStore()
+	ctx := ContextWithTenant(context.Background(), "tenant-a")
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		if err := store.AppendChainEvent(ctx, ChainEventRecord{
+			ID:         fmt.Sprintf("event-%d", i),
+			Definition: "bench",
+			Chain:      "auth",
+			EntityKey:  "user-1",
+			EventType:  "failed_login",
+			CreatedAt:  time.Now().UTC(),
+		}); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
+func BenchmarkMemoryStoreQueryChainEvents(b *testing.B) {
+	store := NewMemoryStore()
+	ctx := ContextWithTenant(context.Background(), "tenant-a")
+	now := time.Now().UTC()
+	for i := 0; i < 1000; i++ {
+		if err := store.AppendChainEvent(ctx, ChainEventRecord{
+			ID: fmt.Sprintf("event-%d", i), Definition: "bench", Chain: "auth",
+			EntityKey: fmt.Sprintf("user-%d", i%10), EventType: "failed_login", CreatedAt: now,
+		}); err != nil {
+			b.Fatal(err)
+		}
+	}
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		if _, err := store.QueryChainEvents(ctx, ChainEventQuery{Definition: "bench", Chain: "auth", EntityKey: fmt.Sprintf("user-%d", i%10), Limit: 100}); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
 func TestMemoryStoreTenantIsolation(t *testing.T) {
 	store := NewMemoryStore()
 	ctxA := ContextWithTenant(context.Background(), "tenant-a")
@@ -77,6 +117,67 @@ func TestMemoryStoreConcurrentTenantAccess(t *testing.T) {
 		}()
 	}
 	wg.Wait()
+}
+
+func TestMemoryStoreEntityLockHonorsCancellation(t *testing.T) {
+	tests := []struct {
+		name  string
+		store Store
+	}{
+		{name: "memory", store: NewMemoryStore()},
+		{name: "file", store: mustFileStore(t)},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			locker := tt.store.(EntityLocker)
+			unlock, err := locker.LockEntity(context.Background(), "entity-1")
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer func() { _ = unlock() }()
+			ctx, cancel := context.WithCancel(context.Background())
+			cancel()
+			if _, err := locker.LockEntity(ctx, "entity-1"); err == nil {
+				t.Fatal("expected canceled lock acquisition to fail")
+			}
+		})
+	}
+}
+
+func TestFileStoreCrossInstanceLockHonorsCancellation(t *testing.T) {
+	root := t.TempDir()
+	first, err := NewFileStore(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := NewFileStore(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	unlock, err := first.LockEntity(context.Background(), "shared-entity")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = unlock() }()
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() {
+		unlockSecond, err := second.LockEntity(ctx, "shared-entity")
+		if err == nil {
+			_ = unlockSecond()
+		}
+		done <- err
+	}()
+	time.Sleep(30 * time.Millisecond)
+	cancel()
+	select {
+	case err := <-done:
+		if err != context.Canceled {
+			t.Fatalf("lock error = %v, want context canceled", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("cross-instance lock did not honor cancellation")
+	}
 }
 
 func TestStoresPersistChainEventsAndState(t *testing.T) {

@@ -25,34 +25,58 @@ type FileStore struct {
 }
 
 func (s *FileStore) LockEntity(ctx context.Context, key string) (func() error, error) {
-	value, _ := s.entityLocks.LoadOrStore(key, &sync.Mutex{})
-	local := value.(*sync.Mutex)
-	local.Lock()
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	value, _ := s.entityLocks.LoadOrStore(key, make(chan struct{}, 1))
+	local := value.(chan struct{})
+	select {
+	case local <- struct{}{}:
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
 	digest := sha256.Sum256([]byte(key))
 	dir := filepath.Join(s.root, ".locks")
 	if err := os.MkdirAll(dir, 0o700); err != nil {
-		local.Unlock()
+		<-local
 		return nil, err
 	}
 	file, err := os.OpenFile(filepath.Join(dir, fmt.Sprintf("%x.lock", digest)), os.O_CREATE|os.O_RDWR, 0o600)
 	if err != nil {
-		local.Unlock()
+		<-local
 		return nil, err
 	}
-	if err := unix.Flock(int(file.Fd()), unix.LOCK_EX); err != nil {
+	if err := flockContext(ctx, file); err != nil {
 		_ = file.Close()
-		local.Unlock()
+		<-local
 		return nil, err
 	}
 	return func() error {
 		unlockErr := unix.Flock(int(file.Fd()), unix.LOCK_UN)
 		closeErr := file.Close()
-		local.Unlock()
+		<-local
 		if unlockErr != nil {
 			return unlockErr
 		}
 		return closeErr
 	}, nil
+}
+
+func flockContext(ctx context.Context, file *os.File) error {
+	for {
+		if err := unix.Flock(int(file.Fd()), unix.LOCK_EX|unix.LOCK_NB); err == nil {
+			return nil
+		} else if !errors.Is(err, unix.EWOULDBLOCK) && !errors.Is(err, unix.EAGAIN) {
+			return err
+		}
+		timer := time.NewTimer(10 * time.Millisecond)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return ctx.Err()
+		case <-timer.C:
+		}
+	}
 }
 
 func NewFileStore(root string) (*FileStore, error) {

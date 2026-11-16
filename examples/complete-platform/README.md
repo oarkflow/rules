@@ -16,13 +16,13 @@ This example demonstrates the full native Condition platform surface with a runn
 Run the demo once:
 
 ```sh
-go run ./examples/complete-platform
+cd examples && go run ./complete-platform
 ```
 
 Run it as a Fiber server:
 
 ```sh
-go run ./examples/complete-platform --serve --addr :8082
+cd examples && go run ./complete-platform --serve --addr :8082
 ```
 
 Validate only the policy package:
@@ -52,6 +52,47 @@ rules/chains/response_errors.bcl
 rules/lifecycle.bcl
 tests/lifecycle_tests.bcl
 ```
+
+## BCL Is the Policy
+
+The `.bcl` files define the rules. Go code extracts request and response facts, calls the engine, and applies the returned enforcement envelope. HTTP JSON is application input; it is never a substitute for the policy.
+
+For example, `rules/endpoints/login.bcl` detects failed JSON logins:
+
+```bcl
+row "json-login-failed" {
+  priority 100
+  when {
+    all {
+      route.id == "login"
+      request.body_format == "json"
+      request.body_json.username != ""
+      response.class == "expected_client_error"
+    }
+  }
+  then {
+    outcome {
+      decision require_review
+      reason "json login failed"
+      attributes { action "failed_login" }
+      metadata { severity "medium" category "authn" }
+    }
+  }
+  reason "json login failed"
+  reason_code "JSON_LOGIN_FAILED"
+}
+```
+
+That `failed_login` event feeds `rules/chains/account_risk.bcl`, where BCL defines a rolling window, successful-login reset, thresholds, cooldowns, and the response envelope for each escalation step. `rules/decisions/pre_request_guard.bcl` enforces active cooldowns before the login handler runs. `rules/lifecycle.bcl` connects the pre, post, and error phases. BCL tests in `tests/lifecycle_tests.bcl` exercise the stateful request sequence.
+
+Run the BCL acceptance tests and the host integration demo with:
+
+```sh
+go run ./cmd/rules validate --store memory --name complete-platform --tests ./examples/complete-platform/decision.bcl
+cd examples && go run ./complete-platform
+```
+
+The `curl` bodies below are HTTP examples for the demo app. If you are authoring policy, change the imported `.bcl` files and their BCL tests instead.
 
 ## Use Cases
 
